@@ -13,7 +13,7 @@ import smtplib
 import threading
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Optional
+from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
 
