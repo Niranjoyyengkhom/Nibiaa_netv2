@@ -4,7 +4,7 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV PORT=3003
+ENV PORT=3002
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -15,6 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 3003
+EXPOSE 3002
 
 CMD ["python", "run.py"]

@@ -12,10 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-ENV PORT=3004
+ENV PORT=3003
 ENV HOST=0.0.0.0
 ENV PYTHONPATH=/app
 
-EXPOSE 3004
+EXPOSE 3003
 
 CMD ["python", "run.py"]
