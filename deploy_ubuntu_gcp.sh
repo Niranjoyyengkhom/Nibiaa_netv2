@@ -71,6 +71,12 @@ fi
 echo "[6/6] Building and starting all Docker containers..."
 sudo docker compose down --remove-orphans || true
 sudo docker compose build --parallel
+
+# Clean build cache to free disk space for external image pulls
+echo "Freeing build cache to preserve disk space..."
+sudo docker builder prune -f || true
+sudo apt-get clean || true
+
 sudo docker compose up -d
 
 echo "===================================================================="
