@@ -59,6 +59,8 @@ services:
       PORT: 3000
       HOST: 0.0.0.0
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@db:5432/${POSTGRES_DB:-device_registry}
+      BILLING_DATABASE_NAME: billing
+      BILLING_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@db:5432/billing
       REDIS_ENABLED: "true"
       REDIS_URL: redis://redis:6379/0
       CASSANDRA_ENABLED: "true"
@@ -67,8 +69,10 @@ services:
       CASSANDRA_KEYSPACE: nibiaanet
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-nibiaanet_jwt_secret_production_key_369}
       DECODER_SERVICE_URL: http://decoder:3001
-      IAM_SERVICE_URL: http://iam:3003
-      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3003,http://127.0.0.1:3003
+      IAM_SERVICE_URL: http://iam:3002
+      BILLING_SERVICE_URL: http://billing:3003
+      PROTOCOL_INGESTION_SERVICE_URL: http://protocol_ingestion:1002
+      ALLOWED_ORIGINS: "*"
     ports:
       - "3000:3000"
     depends_on:
@@ -100,7 +104,7 @@ services:
       CASSANDRA_KEYSPACE: nibiaanet
       UDP_PORT: 5005
       UDP_INGEST_ENABLED: "true"
-      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001
+      ALLOWED_ORIGINS: "*"
     ports:
       - "3001:3001"
       - "5005:5005/udp"
@@ -123,18 +127,18 @@ services:
       dockerfile: Dockerfile
     container_name: nibiaanet_iam
     environment:
-      PORT: 3003
+      PORT: 3002
       HOST: 0.0.0.0
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@db:5432/${POSTGRES_DB:-device_registry}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-nibiaanet_jwt_secret_production_key_369}
-      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3003,http://127.0.0.1:3003,http://localhost:3003,http://127.0.0.1:3003
+      ALLOWED_ORIGINS: "*"
     ports:
-      - "3000:3000"
+      - "3002:3002"
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3003/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3002/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -160,7 +164,7 @@ services:
       MONOGOTO_SANDBOX_MODE: "true"
       ODOO_URL: http://localhost:8069
       ODOO_MOCK_MODE: "true"
-      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3003,http://127.0.0.1:3003
+      ALLOWED_ORIGINS: "*"
     ports:
       - "3003:3003"
     depends_on:
@@ -174,20 +178,45 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  protocol_ingestion:
+    build:
+      context: ./protocol_ingestion
+      dockerfile: Dockerfile
+    container_name: nibiaanet_protocol_ingestion
+    environment:
+      BACKEND_INGEST_URL: http://backend:3000/ingest/internal-uplink
+    ports:
+      - "5001:5001/udp"
+      - "1883:1883"
+      - "1001:1001"
+      - "1002:1002"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:1002/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: nibiaanet_frontend
     environment:
-      VITE_API_URL: http://localhost:3000
-      VITE_DECODER_API_URL: http://localhost:3001
-      VITE_IAM_API_URL: http://localhost:3003
-      VITE_BILLING_API_URL: http://localhost:3003
+      PORT: 8080
+      VITE_API_URL: /api
+      VITE_DECODER_API_URL: /decoder
+      VITE_IAM_API_URL: /iam
+      VITE_BILLING_API_URL: /billing-service
       VITE_BACKEND_TARGET: http://backend:3000
       VITE_DECODER_TARGET: http://decoder:3001
-      VITE_IAM_TARGET: http://iam:3003
+      VITE_IAM_TARGET: http://iam:3002
       VITE_BILLING_TARGET: http://billing:3003
+      VITE_INGESTION_TARGET: http://protocol_ingestion:1002
     ports:
       - "8080:8080"
     depends_on:
@@ -195,6 +224,7 @@ services:
       - decoder
       - iam
       - billing
+      - protocol_ingestion
     restart: unless-stopped
 
 volumes:
