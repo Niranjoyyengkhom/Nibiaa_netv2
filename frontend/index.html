@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+
+    <meta
+      name="description"
+      content="NibiaaNet Console: manage IoT devices, decoders and live data across satellite and terrestrial networks."
+    />
+
+    <link rel="icon" type="image/png" href="/nibiaa-logo.png" />
+    <link rel="apple-touch-icon" href="/nibiaa-logo.png" />
+
+    <title>NibiaaNet Console</title>
+
+    <!-- Apply the saved theme before the first paint, so there is no flash -->
+    <script>
+      try {
+        document.documentElement.dataset.theme =
+          localStorage.getItem("nb-theme") || "dark";
+      } catch {}
+    </script>
+  </head>
+
+  <body>
+    <div id="root"></div>
+
+    <script
+      type="module"
+      src="/src/main.jsx"
+    ></script>
+  </body>
+</html>

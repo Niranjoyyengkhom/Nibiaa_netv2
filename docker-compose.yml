@@ -1,0 +1,203 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: nibiaanet_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespassword}
+      POSTGRES_DB: ${POSTGRES_DB:-device_registry}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-device_registry}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: nibiaanet_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  cassandra:
+    image: cassandra:4.1
+    container_name: nibiaanet_cassandra
+    environment:
+      CASSANDRA_CLUSTER_NAME: NibiaaNetCluster
+      CASSANDRA_KEYSPACE: nibiaanet
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    ports:
+      - "9042:9042"
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nibiaanet_backend
+    environment:
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@db:5432/${POSTGRES_DB:-device_registry}
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CASSANDRA_ENABLED: "true"
+      CASSANDRA_HOSTS: cassandra
+      CASSANDRA_PORT: 9042
+      CASSANDRA_KEYSPACE: nibiaanet
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-nibiaanet_jwt_secret_production_key_369}
+      DECODER_SERVICE_URL: http://decoder:3001
+      IAM_SERVICE_URL: http://iam:3003
+      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3003,http://127.0.0.1:3003
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  decoder:
+    build:
+      context: ./decoder
+      dockerfile: Dockerfile
+    container_name: nibiaanet_decoder
+    environment:
+      PORT: 3001
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@db:5432/${POSTGRES_DB:-device_registry}
+      REDIS_URL: redis://redis:6379/0
+      CASSANDRA_ENABLED: "true"
+      CASSANDRA_HOSTS: cassandra
+      CASSANDRA_PORT: 9042
+      CASSANDRA_KEYSPACE: nibiaanet
+      UDP_PORT: 5005
+      UDP_INGEST_ENABLED: "true"
+      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001
+    ports:
+      - "3001:3001"
+      - "5005:5005/udp"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  iam:
+    build:
+      context: ./iam_service
+      dockerfile: Dockerfile
+    container_name: nibiaanet_iam
+    environment:
+      PORT: 3003
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@db:5432/${POSTGRES_DB:-device_registry}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-nibiaanet_jwt_secret_production_key_369}
+      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3003,http://127.0.0.1:3003,http://localhost:3003,http://127.0.0.1:3003
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3003/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  billing:
+    build:
+      context: ./billing
+      dockerfile: Dockerfile
+    container_name: nibiaanet_billing
+    environment:
+      PORT: 3003
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@db:5432/billing
+      DATABASE_NAME: billing
+      BILLING_ENCRYPTION_KEY: ${BILLING_ENCRYPTION_KEY:-nibiaanet_aes256_billing_storage_secret_key_2026!}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-nibiaanet_jwt_secret_production_key_369}
+      JWT_ALGORITHM: HS256
+      ONCE_API_BASE_URL: https://api.1nce.com/management-api
+      ONCE_SANDBOX_MODE: "true"
+      MONOGOTO_API_BASE_URL: https://api.monogoto.io
+      MONOGOTO_SANDBOX_MODE: "true"
+      ODOO_URL: http://localhost:8069
+      ODOO_MOCK_MODE: "true"
+      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3003,http://127.0.0.1:3003
+    ports:
+      - "3003:3003"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3003/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: nibiaanet_frontend
+    environment:
+      VITE_API_URL: http://localhost:3000
+      VITE_DECODER_API_URL: http://localhost:3001
+      VITE_IAM_API_URL: http://localhost:3003
+      VITE_BILLING_API_URL: http://localhost:3003
+      VITE_BACKEND_TARGET: http://backend:3000
+      VITE_DECODER_TARGET: http://decoder:3001
+      VITE_IAM_TARGET: http://iam:3003
+      VITE_BILLING_TARGET: http://billing:3003
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+      - decoder
+      - iam
+      - billing
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  cassandra_data:
+  redis_data:
