@@ -328,6 +328,283 @@ function formatRelativeTime(dateStr) {
   }
 }
 
+function InboundPayloadView({ hex }) {
+  const [copied, setCopied] = useState(false);
+
+  // Parse hex into all formats
+  const parsed = useMemo(() => {
+    if (!hex || typeof hex !== "string") {
+      return { isEmpty: true };
+    }
+    const cleanHex = hex.trim().replace(/^0x/i, "").replace(/\s+/g, "");
+    if (!cleanHex || cleanHex.length < 2) {
+      return { isEmpty: true };
+    }
+
+    const bytes = [];
+    for (let i = 0; i < cleanHex.length; i += 2) {
+      bytes.push(parseInt(cleanHex.substring(i, i + 2), 16));
+    }
+
+    // 1. UTF-8 Text / JSON
+    let text = "";
+    let isUtf8 = false;
+    let isJson = false;
+    let formattedJson = null;
+
+    try {
+      const uint8 = new Uint8Array(bytes);
+      text = new TextDecoder("utf-8", { fatal: true }).decode(uint8);
+      isUtf8 = true;
+    } catch {
+      // Fallback: check printable ASCII
+      let printable = 0;
+      for (const b of bytes) {
+        if ((b >= 32 && b <= 126) || b === 10 || b === 13 || b === 9) printable++;
+      }
+      if (bytes.length > 0 && printable / bytes.length >= 0.8) {
+        text = bytes.map((b) => ((b >= 32 && b <= 126) || b === 10 || b === 13 || b === 9 ? String.fromCharCode(b) : ".")).join("");
+        isUtf8 = true;
+      }
+    }
+
+    if (isUtf8 && text) {
+      const trimmed = text.trim();
+      if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+        try {
+          const obj = JSON.parse(trimmed);
+          formattedJson = JSON.stringify(obj, null, 2);
+          isJson = true;
+        } catch {}
+      }
+    }
+
+    // 2. Base64
+    let b64 = "";
+    try {
+      let bin = "";
+      for (const b of bytes) bin += String.fromCharCode(b);
+      b64 = btoa(bin);
+    } catch {}
+
+    // 3. Formatted Hex (spaced)
+    const spacedHex = cleanHex.match(/.{1,2}/g)?.join(" ") || cleanHex;
+
+    // 4. Byte array string
+    const byteArrStr = "[" + bytes.join(", ") + "]";
+
+    const defaultMode = isJson ? "json" : isUtf8 ? "text" : "hex";
+
+    return {
+      isEmpty: false,
+      bytesCount: bytes.length,
+      isJson,
+      isUtf8,
+      defaultMode,
+      json: formattedJson,
+      text: text,
+      hex: spacedHex,
+      rawHex: cleanHex,
+      base64: b64,
+      bytesArray: byteArrStr,
+    };
+  }, [hex]);
+
+  const [mode, setMode] = useState(parsed.defaultMode || "json");
+
+  // Keep mode in sync if payload changes
+  useEffect(() => {
+    if (parsed.defaultMode) {
+      setMode(parsed.defaultMode);
+    }
+  }, [parsed.defaultMode]);
+
+  if (parsed.isEmpty) {
+    return (
+      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic", marginTop: "6px" }}>
+        No payload bytes
+      </div>
+    );
+  }
+
+  const currentContent =
+    mode === "json"
+      ? parsed.json || parsed.text
+      : mode === "text"
+      ? parsed.text
+      : mode === "base64"
+      ? parsed.base64
+      : mode === "bytes"
+      ? parsed.bytesArray
+      : parsed.hex;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(currentContent);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div style={{ marginTop: "8px" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "4px",
+          gap: "6px",
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontSize: "0.72rem", color: "var(--text-muted, #94a3b8)", fontWeight: 600 }}>
+            Raw Data ({parsed.bytesCount} B):
+          </span>
+          {parsed.isJson && (
+            <span
+              style={{
+                fontSize: "0.65rem",
+                padding: "1px 5px",
+                borderRadius: "3px",
+                background: "rgba(52, 211, 153, 0.15)",
+                color: "#34d399",
+                border: "1px solid rgba(52, 211, 153, 0.3)",
+                fontWeight: 600,
+              }}
+            >
+              JSON
+            </span>
+          )}
+        </div>
+
+        {/* Format Selector Tabs */}
+        <div style={{ display: "flex", gap: "3px", alignItems: "center" }}>
+          {parsed.isJson && (
+            <button
+              type="button"
+              onClick={() => setMode("json")}
+              style={{
+                fontSize: "0.68rem",
+                padding: "2px 6px",
+                borderRadius: "4px",
+                border: mode === "json" ? "1px solid #38bdf8" : "1px solid rgba(255,255,255,0.1)",
+                background: mode === "json" ? "rgba(56, 189, 248, 0.2)" : "rgba(0,0,0,0.2)",
+                color: mode === "json" ? "#38bdf8" : "var(--text-muted, #94a3b8)",
+                cursor: "pointer",
+                fontWeight: mode === "json" ? 600 : 400,
+              }}
+            >
+              JSON
+            </button>
+          )}
+          {parsed.isUtf8 && (
+            <button
+              type="button"
+              onClick={() => setMode("text")}
+              style={{
+                fontSize: "0.68rem",
+                padding: "2px 6px",
+                borderRadius: "4px",
+                border: mode === "text" ? "1px solid #38bdf8" : "1px solid rgba(255,255,255,0.1)",
+                background: mode === "text" ? "rgba(56, 189, 248, 0.2)" : "rgba(0,0,0,0.2)",
+                color: mode === "text" ? "#38bdf8" : "var(--text-muted, #94a3b8)",
+                cursor: "pointer",
+                fontWeight: mode === "text" ? 600 : 400,
+              }}
+            >
+              Text
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setMode("hex")}
+            style={{
+              fontSize: "0.68rem",
+              padding: "2px 6px",
+              borderRadius: "4px",
+              border: mode === "hex" ? "1px solid #38bdf8" : "1px solid rgba(255,255,255,0.1)",
+              background: mode === "hex" ? "rgba(56, 189, 248, 0.2)" : "rgba(0,0,0,0.2)",
+              color: mode === "hex" ? "#38bdf8" : "var(--text-muted, #94a3b8)",
+              cursor: "pointer",
+              fontWeight: mode === "hex" ? 600 : 400,
+            }}
+          >
+            Hex
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("base64")}
+            style={{
+              fontSize: "0.68rem",
+              padding: "2px 6px",
+              borderRadius: "4px",
+              border: mode === "base64" ? "1px solid #38bdf8" : "1px solid rgba(255,255,255,0.1)",
+              background: mode === "base64" ? "rgba(56, 189, 248, 0.2)" : "rgba(0,0,0,0.2)",
+              color: mode === "base64" ? "#38bdf8" : "var(--text-muted, #94a3b8)",
+              cursor: "pointer",
+              fontWeight: mode === "base64" ? 600 : 400,
+            }}
+          >
+            Base64
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("bytes")}
+            style={{
+              fontSize: "0.68rem",
+              padding: "2px 6px",
+              borderRadius: "4px",
+              border: mode === "bytes" ? "1px solid #38bdf8" : "1px solid rgba(255,255,255,0.1)",
+              background: mode === "bytes" ? "rgba(56, 189, 248, 0.2)" : "rgba(0,0,0,0.2)",
+              color: mode === "bytes" ? "#38bdf8" : "var(--text-muted, #94a3b8)",
+              cursor: "pointer",
+              fontWeight: mode === "bytes" ? 600 : 400,
+            }}
+          >
+            Bytes
+          </button>
+          <button
+            type="button"
+            onClick={handleCopy}
+            style={{
+              fontSize: "0.68rem",
+              padding: "2px 6px",
+              borderRadius: "4px",
+              border: "1px solid rgba(255,255,255,0.15)",
+              background: "rgba(255,255,255,0.06)",
+              color: copied ? "#34d399" : "var(--text-muted, #94a3b8)",
+              cursor: "pointer",
+              marginLeft: "3px",
+            }}
+            title="Copy current format to clipboard"
+          >
+            {copied ? "✓ Copied" : "📋 Copy"}
+          </button>
+        </div>
+      </div>
+
+      <pre
+        style={{
+          fontSize: "0.75rem",
+          background: "rgba(0,0,0,0.35)",
+          border: "1px solid rgba(255,255,255,0.07)",
+          padding: "8px 10px",
+          borderRadius: "6px",
+          color: mode === "json" ? "#38bdf8" : "#cbd5e1",
+          wordBreak: "break-all",
+          whiteSpace: mode === "json" ? "pre" : "pre-wrap",
+          maxHeight: "160px",
+          overflowY: "auto",
+          fontFamily: "var(--mono, monospace)",
+          margin: 0,
+        }}
+      >
+        {currentContent}
+      </pre>
+    </div>
+  );
+}
+
 export function DecoderRunner({ currentUser, api }) {
   // Live decoders apply to every matching message, so only admins save them
   const isAdmin = currentUser?.role === "admin";
@@ -469,10 +746,24 @@ export function DecoderRunner({ currentUser, api }) {
   function loadIntoDecoder(msg) {
     if (msg.rawPayloadHex) {
       const cleanHex = msg.rawPayloadHex.trim();
-      const asciiText = hexToAsciiStr(cleanHex);
-      if (asciiText.trim().startsWith("{") && asciiText.trim().endsWith("}")) {
-        setPayload(asciiText.trim());
-        setFormat("json");
+      let utf8Text = "";
+      try {
+        const bytes = cleanHex.match(/.{1,2}/g)?.map((b) => parseInt(b, 16)) || [];
+        utf8Text = new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+      } catch {
+        utf8Text = hexToAsciiStr(cleanHex);
+      }
+
+      const trimmed = utf8Text.trim();
+      if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          setPayload(JSON.stringify(parsed, null, 2));
+          setFormat("json");
+        } catch {
+          setPayload(cleanHex);
+          setFormat("hex");
+        }
       } else {
         setPayload(cleanHex);
         setFormat("hex");
@@ -934,27 +1225,8 @@ export function DecoderRunner({ currentUser, api }) {
                       </span>
                     </div>
 
-                    {/* RAW PAYLOAD DISPLAY */}
-                    {msg.rawPayloadHex && (
-                      <div style={{ marginTop: "8px" }}>
-                        <span style={{ fontSize: "0.72rem", color: "var(--text-muted, #94a3b8)", display: "block", marginBottom: "2px" }}>
-                          Raw Payload Hex:
-                        </span>
-                        <code
-                          style={{
-                            fontSize: "0.75rem",
-                            background: "rgba(0,0,0,0.3)",
-                            padding: "3px 6px",
-                            borderRadius: "4px",
-                            color: "#cbd5e1",
-                            wordBreak: "break-all",
-                            display: "block",
-                          }}
-                        >
-                          {msg.rawPayloadHex}
-                        </code>
-                      </div>
-                    )}
+                    {/* MULTI-FORMAT RAW PAYLOAD DISPLAY (JSON / TEXT / HEX / BASE64 / BYTES) */}
+                    <InboundPayloadView hex={msg.rawPayloadHex} />
 
                     {/* DECODED OUTPUT JSON */}
                     <div style={{ marginTop: "8px" }}>
