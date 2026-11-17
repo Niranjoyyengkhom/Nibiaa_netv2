@@ -507,12 +507,13 @@ async def ingest_hubble_webhook(
                     except Exception as store_err:
                         logger.warning("Telemetry fallback storage error: %s", store_err)
 
+            msg_status_val = (msg.status.value if hasattr(msg.status, "value") else str(msg.status)) if msg and msg.status else "ROUTED"
             results.append({
                 "index": idx,
                 "device_id": str(device_id),
                 "device_name": device_name,
-                "message_id": msg.id,
-                "status": msg.status.value if msg and msg.status else "ROUTED",
+                "message_id": msg.id if msg else None,
+                "status": msg_status_val,
                 "telemetry_id": getattr(msg, "telemetry_id", None),
                 "decoded": getattr(msg, "decoded", None),
             })
