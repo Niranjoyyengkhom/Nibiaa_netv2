@@ -244,6 +244,7 @@ services:
       ACME_EMAIL: ${ACME_EMAIL:-admin@nibiaa.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/caddy/certs:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

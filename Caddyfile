@@ -2,8 +2,10 @@
     email {$ACME_EMAIL:admin@nibiaa.com}
 }
 
-# NibiaaNet Production Domains (supports both nibiaanet and nibiaaplaxx)
-nibiaanet.nibiaa.com, http://nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com, http://nibiaaplaxx.nibiaa.com {
+# NibiaaNet Production Domains and Server IP (Self-Signed CA SSL)
+nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com, 34.122.43.248, localhost {
+    tls /etc/caddy/certs/server.crt /etc/caddy/certs/server.key
+
     # Webhook Ingestion endpoints for Hubble Network and 3rd party gateways
     handle /webhook* {
         reverse_proxy protocol_ingestion:1002
