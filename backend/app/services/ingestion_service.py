@@ -794,6 +794,9 @@ class IngestionService:
                 if not fmt_affinity or fmt_affinity in ("any", "all", "*"):
                     schema = self.decode_schema_service.get_schema_for_application(db, dtd.decode_schema_id)
                     if schema:
+                        # Declarative binary byte field schemas cannot decode JSON payloads
+                        if detected_fmt == "json" and schema.kind == "fields":
+                            continue
                         message.decoder_selection = f"device_type_{dt.code}_any"
                         return schema
 
@@ -820,6 +823,8 @@ class IngestionService:
             if not fmt_affinity or fmt_affinity in ("any", "all", "*"):
                 schema = self.decode_schema_service.get_schema_for_application(db, ad.decode_schema_id)
                 if schema:
+                    if detected_fmt == "json" and schema.kind == "fields":
+                        continue
                     message.decoder_selection = "application_decoder_any"
                     return schema
 
@@ -843,8 +848,11 @@ class IngestionService:
             if schema is not None:
                 assigned_fmt = getattr(schema, "match_payload_format", None)
                 if not assigned_fmt or assigned_fmt in ("any", detected_fmt):
-                    message.decoder_selection = "application"
-                    return schema
+                    if detected_fmt == "json" and schema.kind == "fields":
+                        pass
+                    else:
+                        message.decoder_selection = "application"
+                        return schema
 
         # 5. Match any live decoder matching criteria
         attrs_without_fmt = dict(attrs_with_fmt)
@@ -855,8 +863,9 @@ class IngestionService:
             attrs_without_fmt
         )
         if schema is not None:
-            message.decoder_selection = "match_fallback"
-            return schema
+            if not (detected_fmt == "json" and schema.kind == "fields"):
+                message.decoder_selection = "match_fallback"
+                return schema
 
         # 6. Final fallback to application assigned decoder
         if application.decode_schema_id is not None:
@@ -865,8 +874,9 @@ class IngestionService:
                 application.decode_schema_id
             )
             if schema is not None:
-                message.decoder_selection = "application_fallback"
-                return schema
+                if not (detected_fmt == "json" and schema.kind == "fields"):
+                    message.decoder_selection = "application_fallback"
+                    return schema
 
         return None
 

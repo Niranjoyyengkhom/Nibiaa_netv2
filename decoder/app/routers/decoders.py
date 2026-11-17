@@ -100,6 +100,74 @@ def save_decoder(req: DecoderCreateRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(decoder)
 
+    # Sync into platform decode_schemas & decode_schema_activations so backend ingestion uses it immediately
+    try:
+        from sqlalchemy import text
+        match_prov = matching.get("providerId") or matching.get("provider") or None
+        match_proto = matching.get("protocolId") or matching.get("protocol") or None
+        match_devtype = matching.get("deviceTypeId") or matching.get("deviceType") or None
+        match_msgtype = matching.get("messageType") or None
+        match_fmt = matching.get("payloadFormat") or matching.get("format") or None
+        if match_fmt in ("any", "all", "*", ""):
+            match_fmt = None
+
+        row = db.execute(text("SELECT id FROM decode_schemas WHERE name = :name ORDER BY version DESC LIMIT 1"), {"name": name}).fetchone()
+        if row:
+            schema_id = row[0]
+            db.execute(text("""
+                UPDATE decode_schemas 
+                SET code = :code, kind = 'javascript', 
+                    match_provider_id = :prov, match_protocol_id = :proto,
+                    match_device_type_id = :devtype, match_message_type = :msgtype,
+                    match_payload_format = :fmt, description = :desc
+                WHERE id = :id
+            """), {
+                "code": req.code,
+                "prov": match_prov,
+                "proto": match_proto,
+                "devtype": match_devtype,
+                "msgtype": match_msgtype,
+                "fmt": match_fmt,
+                "desc": req.description,
+                "id": schema_id
+            })
+        else:
+            insert_res = db.execute(text("""
+                INSERT INTO decode_schemas (
+                    name, version, kind, code, byte_order, fields,
+                    match_provider_id, match_protocol_id, match_device_type_id,
+                    match_message_type, match_payload_format, description, created_at
+                ) VALUES (
+                    :name, 1, 'javascript', :code, 'big', '[]'::json,
+                    :prov, :proto, :devtype, :msgtype, :fmt, :desc, NOW()
+                ) RETURNING id
+            """), {
+                "name": name,
+                "code": req.code,
+                "prov": match_prov,
+                "proto": match_proto,
+                "devtype": match_devtype,
+                "msgtype": match_msgtype,
+                "fmt": match_fmt,
+                "desc": req.description
+            })
+            schema_id = insert_res.fetchone()[0]
+
+        # Ensure active activation in decode_schema_activations
+        db.execute(text("""
+            INSERT INTO decode_schema_activations (schema_id, note, activated_at)
+            VALUES (:schema_id, 'Activated via Live Decoder Registry', NOW())
+            ON CONFLICT DO NOTHING
+        """), {"schema_id": schema_id})
+
+        # Update applications pointing to default sample decoder (id 1) or null to use this new decoder
+        db.execute(text("""
+            UPDATE applications SET decode_schema_id = :schema_id WHERE decode_schema_id = 1 OR decode_schema_id IS NULL
+        """), {"schema_id": schema_id})
+        db.commit()
+    except Exception as sync_err:
+        print(f"Warning: could not sync to decode_schemas: {sync_err}")
+
     u_time = decoder.updated_at or version_obj.created_at or decoder.created_at or datetime.now(timezone.utc)
     c_time = decoder.created_at or datetime.now(timezone.utc)
     return DecoderResponse(
