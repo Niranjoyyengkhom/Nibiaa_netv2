@@ -20,7 +20,7 @@ the queue. A future consumer only has to call process_uplink().
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 

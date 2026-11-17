@@ -92,6 +92,7 @@ function Telemetry({ api, currentUser, params }) {
   });
 
   const [notice, setNotice] = useState(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   useEffect(() => {
     if (params?.deviceId !== undefined || params?.applicationId !== undefined) {
@@ -116,6 +117,14 @@ function Telemetry({ api, currentUser, params }) {
     fetchTelemetry();
     fetchUsage();
   }, [api]);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(() => {
+      fetchTelemetry(filters);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, filters, canRead]);
 
   async function fetchTelemetry(activeFilters = filters) {
     if (!canRead) {
@@ -271,17 +280,31 @@ function Telemetry({ api, currentUser, params }) {
         <div className="section-header">
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+              <span className="ttn-pulse-dot" />
               <h2>Application Traffic</h2>
+              <span className="pill pill-ok" style={{ fontSize: "0.72rem", padding: "2px 8px" }}>
+                LIVE
+              </span>
               <span className="pill" style={{ background: "rgba(16, 185, 129, 0.15)", color: "#10b981", border: "1px solid rgba(16, 185, 129, 0.3)", fontSize: "0.75rem", padding: "2px 8px", borderRadius: "12px" }}>
                 ⏱ 24h Auto-Retention Active
               </span>
             </div>
-            <p>Newest first. Telemetry older than 24 hours is automatically pruned.</p>
+            <p>Newest first. Real-time telemetry feed from Hubble Network and other providers.</p>
           </div>
           {canRead && (
-            <button className="secondary-button" onClick={() => fetchTelemetry()}>
-              Refresh
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.8rem", color: "var(--text-muted)", cursor: "pointer", userSelect: "none" }}>
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                />
+                Auto-poll (4s)
+              </label>
+              <button className="secondary-button" onClick={() => fetchTelemetry()}>
+                Refresh
+              </button>
+            </div>
           )}
         </div>
 

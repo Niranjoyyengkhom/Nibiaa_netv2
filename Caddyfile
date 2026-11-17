@@ -12,15 +12,20 @@ http://34.122.43.248, 34.122.43.248 {
 
 # Official Public SSL (Let's Encrypt / ZeroSSL)
 nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com {
-    # Webhook Ingestion endpoints for Hubble Network and 3rd party gateways
-    handle /webhook* {
+    # Dedicated Hubble Network Webhook endpoints -> backend
+    handle /webhooks* {
+        reverse_proxy backend:3000
+    }
+
+    # Protocol Ingestion Microservice generic webhooks
+    handle /webhook {
+        reverse_proxy protocol_ingestion:1002
+    }
+    handle /webhook/* {
         reverse_proxy protocol_ingestion:1002
     }
     handle /ingest* {
         reverse_proxy protocol_ingestion:1002
-    }
-    handle /webhooks/* {
-        reverse_proxy backend:3000
     }
     handle /endpoints* {
         reverse_proxy protocol_ingestion:1002

@@ -19,6 +19,7 @@ from fastapi import (
     status,
 )
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
