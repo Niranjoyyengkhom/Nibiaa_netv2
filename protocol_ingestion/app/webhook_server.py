@@ -97,14 +97,39 @@ async def receive_webhook_uplink(
         if not isinstance(pkt, dict):
             continue
 
-        device_id = pkt.get("deviceId") or pkt.get("device_id") or pkt.get("id")
-        payload_val = pkt.get("payload") or pkt.get("data") or pkt.get("bytes") or pkt.get("rawPayload")
-        provider = pkt.get("provider") or (endpoint_path.split("/")[0] if endpoint_path else "webhook")
+        dev_obj = pkt.get("device") if isinstance(pkt.get("device"), dict) else {}
+        loc_obj = pkt.get("location") if isinstance(pkt.get("location"), dict) else {}
+
+        device_id = (
+            dev_obj.get("id")
+            or pkt.get("deviceId")
+            or pkt.get("device_id")
+            or dev_obj.get("name")
+            or pkt.get("id")
+        )
+        payload_val = (
+            dev_obj.get("payload")
+            if "payload" in dev_obj
+            else (pkt.get("payload") or pkt.get("data") or pkt.get("bytes") or pkt.get("rawPayload"))
+        )
+        provider = pkt.get("provider") or (endpoint_path.split("/")[0] if endpoint_path else ("hubble" if dev_obj else "webhook"))
 
         if not payload_val:
-            continue
-
-        if isinstance(payload_val, str):
+            # Synthesize telemetry JSON if payload is empty beacon/ping
+            lat = loc_obj.get("latitude") or pkt.get("latitude")
+            lon = loc_obj.get("longitude") or pkt.get("longitude")
+            telemetry_data = {
+                "latitude": float(lat) if lat is not None else None,
+                "longitude": float(lon) if lon is not None else None,
+                "altitude": loc_obj.get("altitude"),
+                "rssi": dev_obj.get("rssi") or pkt.get("rssi"),
+                "sequence_number": dev_obj.get("sequence_number") or pkt.get("seq"),
+                "counter": dev_obj.get("counter"),
+                "device_name": dev_obj.get("name"),
+            }
+            telemetry_data = {k: v for k, v in telemetry_data.items() if v is not None}
+            raw_bytes = json.dumps(telemetry_data).encode("utf-8")
+        elif isinstance(payload_val, str):
             try:
                 raw_bytes = bytes.fromhex(payload_val.replace("0x", ""))
             except ValueError:

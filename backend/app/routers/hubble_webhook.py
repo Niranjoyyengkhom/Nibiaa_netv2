@@ -22,8 +22,12 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.application import Application
 from app.models.decoded_message import DecodedMessageStatus
+from app.models.device import Device
+from app.models.device_type import DeviceType
 from app.models.ingestion_profile import IngestionProfile
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.ingestion_service import IngestionService
 from app.services.user_service import verify_password
@@ -253,8 +257,7 @@ def hubble_webhook_health():
     description=(
         "Receives device telemetry packets from Hubble Network. "
         "Supports Hubble Webhook Secret Token (HTTP-X-HUBBLE-TOKEN) or HTTP Basic Authentication. "
-        "Parses packet batches, single packets, or packet arrays, stages and decodes them, "
-        "and stores telemetry in NibiaaNet."
+        "Auto-registers new devices and stores telemetry coordinates, RSSI, and metrics."
     ),
 )
 @router.post(
@@ -279,7 +282,7 @@ async def ingest_hubble_webhook(
             detail=f"Invalid JSON payload: {str(e)}",
         )
 
-    # Extract packets list
+    # Extract packets list (Hubble sends single object, batch, or array)
     packets = []
     if isinstance(body, list):
         packets = body
@@ -309,43 +312,160 @@ async def ingest_hubble_webhook(
         if not isinstance(pkt, dict):
             continue
 
+        # Hubble live payload format: {"device": {...}, "location": {...}, "network_type": "..."}
+        dev_obj = pkt.get("device") if isinstance(pkt.get("device"), dict) else {}
+        loc_obj = pkt.get("location") if isinstance(pkt.get("location"), dict) else {}
+
+        # 1. Resolve Device ID and Name
         device_id = (
-            pkt.get("deviceId")
+            dev_obj.get("id")
+            or pkt.get("deviceId")
             or pkt.get("device_id")
+            or dev_obj.get("name")
             or pkt.get("devId")
             or pkt.get("dev_id")
             or pkt.get("id")
             or pkt.get("deviceAddress")
         )
+        device_name = dev_obj.get("name") or pkt.get("name") or str(device_id)
 
-        raw_payload_data = (
-            pkt.get("payload")
-            or pkt.get("data")
-            or pkt.get("bytes")
-            or pkt.get("rawPayload")
-            or pkt.get("telemetry")
-        )
-
-        if not device_id or raw_payload_data is None:
-            logger.warning("Skipping malformed Hubble packet at index %d: missing deviceId or payload", idx)
+        if not device_id:
+            logger.warning("Skipping malformed Hubble packet at index %d: missing device identifier in %s", idx, pkt)
             continue
+        device_id = str(device_id).strip()
 
-        raw_bytes = parse_raw_payload(raw_payload_data)
-        rx_time = parse_timestamp(pkt.get("timestamp") or pkt.get("rx_time") or pkt.get("time"))
+        # 2. Extract Location
+        lat = loc_obj.get("latitude") if "latitude" in loc_obj else (pkt.get("latitude") or pkt.get("lat"))
+        lon = loc_obj.get("longitude") if "longitude" in loc_obj else (pkt.get("longitude") or pkt.get("lon") or pkt.get("lng"))
+        altitude = loc_obj.get("altitude") if "altitude" in loc_obj else pkt.get("altitude")
+        accuracy = loc_obj.get("horizontal_accuracy") if "horizontal_accuracy" in loc_obj else pkt.get("accuracy")
 
-        # Extract satellite and RF metadata
-        rssi = pkt.get("rssi")
-        snr = pkt.get("snr")
-        seq = pkt.get("seq") or pkt.get("sequenceNumber") or pkt.get("seqNumber")
-        freq = pkt.get("frequency") or pkt.get("freq")
-        lat = pkt.get("latitude") or pkt.get("lat")
-        lon = pkt.get("longitude") or pkt.get("lon") or pkt.get("lng")
-        sat_id = pkt.get("satelliteId") or pkt.get("satId") or pkt.get("constellation")
+        # 3. Extract RF and Network metadata
+        rssi = dev_obj.get("rssi") if "rssi" in dev_obj else pkt.get("rssi")
+        snr = dev_obj.get("snr") if "snr" in dev_obj else pkt.get("snr")
+        seq = dev_obj.get("sequence_number") if "sequence_number" in dev_obj else (dev_obj.get("seq") or pkt.get("seq") or pkt.get("sequenceNumber"))
+        counter = dev_obj.get("counter") if "counter" in dev_obj else pkt.get("counter")
+        network_type = pkt.get("network_type") or dev_obj.get("network_type") or "TERRESTRIAL"
+        tags = dev_obj.get("tags") if isinstance(dev_obj.get("tags"), dict) else {}
+
+        # 4. Resolve Raw Payload
+        raw_payload_data = None
+        if "payload" in dev_obj:
+            raw_payload_data = dev_obj.get("payload")
+        elif "payload" in pkt:
+            raw_payload_data = pkt.get("payload")
+        elif "data" in dev_obj:
+            raw_payload_data = dev_obj.get("data")
+        elif "data" in pkt:
+            raw_payload_data = pkt.get("data")
+
+        # If payload string is present (e.g. "01020304" or base64), decode it
+        if raw_payload_data:
+            raw_bytes = parse_raw_payload(raw_payload_data)
+        else:
+            # If payload is empty "" or None (e.g. Hubble location/presence beacon),
+            # synthesize a rich JSON telemetry payload so NibiaaNet captures all parameters directly
+            telemetry_data = {
+                "latitude": float(lat) if lat is not None else None,
+                "longitude": float(lon) if lon is not None else None,
+                "altitude": float(altitude) if altitude is not None else None,
+                "horizontal_accuracy": float(accuracy) if accuracy is not None else None,
+                "rssi": int(rssi) if rssi is not None else None,
+                "sequence_number": int(seq) if seq is not None else None,
+                "counter": int(counter) if counter is not None else None,
+                "network_type": str(network_type) if network_type is not None else None,
+                "device_name": device_name,
+            }
+            if tags:
+                telemetry_data["tags"] = tags
+            telemetry_data = {k: v for k, v in telemetry_data.items() if v is not None}
+            raw_bytes = json.dumps(telemetry_data).encode("utf-8")
+
+        # 5. AUTO-REGISTER DEVICE IF NOT REGISTERED
+        existing_device = (
+            db.query(Device)
+            .filter((Device.device_id == device_id) | (Device.name == device_name))
+            .first()
+        )
+        if not existing_device:
+            try:
+                # Find or create active tenant
+                tenant = db.query(Tenant).filter(Tenant.is_active == True).first()
+                if not tenant:
+                    tenant = Tenant(name="Default Organization", type="organization", is_active=True)
+                    db.add(tenant)
+                    db.flush()
+
+                # Find or create Application
+                app_obj = (
+                    db.query(Application)
+                    .filter(Application.tenant_id == tenant.id)
+                    .order_by(Application.id.asc())
+                    .first()
+                )
+                if not app_obj:
+                    app_obj = Application(name="Hubble Satellite Network", tenant_id=tenant.id)
+                    db.add(app_obj)
+                    db.flush()
+
+                # Ensure DeviceType exists
+                dt_name = "Hubble Satellite" if str(network_type).upper() == "SATELLITE" else "Hubble Terrestrial / BLE"
+                dt = (
+                    db.query(DeviceType)
+                    .filter(DeviceType.application_id == app_obj.id, DeviceType.name == dt_name)
+                    .first()
+                )
+                if not dt:
+                    dt = DeviceType(
+                        application_id=app_obj.id,
+                        name=dt_name,
+                        code="hubble_device",
+                        network_type="NTN" if str(network_type).upper() == "SATELLITE" else "Direct IP",
+                        description="Auto-registered Hubble Network device",
+                    )
+                    db.add(dt)
+                    db.flush()
+
+                # Create Device in DB
+                new_device = Device(
+                    device_id=device_id,
+                    name=device_name or f"Hubble {device_id[:8]}",
+                    device_type=dt_name,
+                    device_type_id=dt.id,
+                    tenant_id=tenant.id,
+                    application_id=app_obj.id,
+                    credentials={
+                        "device_id": device_id,
+                        "device_name": device_name,
+                        "network_type": network_type,
+                        "tags": tags,
+                        "registered_by": "hubble_webhook",
+                        "auto_registered": True,
+                    },
+                )
+                db.add(new_device)
+                db.commit()
+                db.refresh(new_device)
+                existing_device = new_device
+                logger.info("Auto-registered new Hubble device: %s (%s)", device_id, device_name)
+            except Exception as reg_err:
+                db.rollback()
+                logger.warning("Could not auto-register device %s: %s", device_id, reg_err)
+
+        # 6. Extract timestamps
+        rx_time = parse_timestamp(
+            dev_obj.get("timestamp")
+            or loc_obj.get("timestamp")
+            or pkt.get("timestamp")
+            or pkt.get("rx_time")
+        )
 
         metadata: Dict[str, Any] = {
             "source": "hubble_network_webhook",
             "authenticated_as": authenticated_user,
             "remote_ip": remote_ip,
+            "device_name": device_name,
+            "network_type": network_type,
         }
         if rssi is not None:
             metadata["rssi"] = rssi
@@ -353,12 +473,16 @@ async def ingest_hubble_webhook(
             metadata["snr"] = snr
         if seq is not None:
             metadata["sequence_number"] = seq
-        if freq is not None:
-            metadata["frequency_hz"] = freq
+        if counter is not None:
+            metadata["counter"] = counter
         if lat is not None and lon is not None:
-            metadata["coordinates"] = {"latitude": float(lat), "longitude": float(lon)}
-        if sat_id is not None:
-            metadata["satellite_id"] = str(sat_id)
+            metadata["coordinates"] = {
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "altitude": float(altitude) if altitude is not None else None,
+            }
+        if tags:
+            metadata["tags"] = tags
 
         try:
             # Stage message in NibiaaNet DecodedMessage repository
@@ -370,7 +494,7 @@ async def ingest_hubble_webhook(
                 payload_bytes=raw_bytes,
                 client_id=f"hubble-{device_id}",
                 provider="hubble",
-                message_ref=str(pkt.get("messageId") or pkt.get("id") or f"hubble-{idx}-{int(rx_time.timestamp())}"),
+                message_ref=str(pkt.get("messageId") or dev_obj.get("counter") or f"hubble-{idx}-{int(rx_time.timestamp())}"),
                 device_id_hint=str(device_id),
             )
 
@@ -388,8 +512,9 @@ async def ingest_hubble_webhook(
             results.append({
                 "index": idx,
                 "device_id": str(device_id),
+                "device_name": device_name,
                 "message_id": staged_msg.id,
-                "status": processed_record.status.value if processed_record else "QUEUED",
+                "status": processed_record.status.value if processed_record else "ROUTED",
                 "telemetry_id": processed_record.telemetry_id if processed_record else None,
             })
         except Exception as err:
@@ -397,6 +522,7 @@ async def ingest_hubble_webhook(
             results.append({
                 "index": idx,
                 "device_id": str(device_id),
+                "device_name": device_name,
                 "status": "ERROR",
                 "error": str(err),
             })
