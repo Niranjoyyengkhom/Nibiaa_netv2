@@ -38,6 +38,8 @@ fi
 # 3. Configure Ubuntu Local Firewall (UFW)
 echo "[3/6] Configuring Ubuntu UFW rules..."
 sudo ufw allow 22/tcp      comment 'SSH'
+sudo ufw allow 80/tcp      comment 'HTTP (Caddy Auto-HTTPS Redirect)'
+sudo ufw allow 443/tcp     comment 'HTTPS (Caddy Auto-HTTPS Web & API)'
 sudo ufw allow 8080/tcp    comment 'NibiaaNet Frontend Web Console'
 sudo ufw allow 3000/tcp    comment 'Backend API Gateway'
 sudo ufw allow 3001/tcp    comment 'Decoder Microservice'

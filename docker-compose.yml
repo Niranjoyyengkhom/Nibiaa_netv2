@@ -189,7 +189,8 @@ services:
       - "5001:5001/udp"
       - "1883:1883"
       - "1001:1001"
-      - "1002:1002"
+    expose:
+      - "1002"
     depends_on:
       backend:
         condition: service_healthy
@@ -227,7 +228,28 @@ services:
       - protocol_ingestion
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2-alpine
+    container_name: nibiaanet_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "1002:1002"
+    environment:
+      DOMAIN: ${DOMAIN:-34.59.120.169.nip.io}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@nibiaa.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - protocol_ingestion
+
 volumes:
   postgres_data:
   cassandra_data:
   redis_data:
+  caddy_data:
+  caddy_config:
