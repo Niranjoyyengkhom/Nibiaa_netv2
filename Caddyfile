@@ -2,8 +2,8 @@
     email {$ACME_EMAIL:admin@nibiaa.com}
 }
 
-# NibiaaNet Production Domain
-nibiaaplaxx.nibiaa.com, http://nibiaaplaxx.nibiaa.com {
+# NibiaaNet Production Domains (supports both nibiaanet and nibiaaplaxx)
+nibiaanet.nibiaa.com, http://nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com, http://nibiaaplaxx.nibiaa.com {
     # Webhook Ingestion endpoints for Hubble Network and 3rd party gateways
     handle /webhook* {
         reverse_proxy protocol_ingestion:1002
