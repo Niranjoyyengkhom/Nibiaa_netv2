@@ -335,18 +335,42 @@ export default function IngestionProfiles({ api, currentUser }) {
     }
   };
 
+  const liveHost = useMemo(() => {
+    if (typeof window !== "undefined" && window.location.hostname && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+      return window.location.hostname;
+    }
+    return "nibiaanet.nibiaa.com";
+  }, []);
+
+  const liveOrigin = useMemo(() => {
+    if (typeof window !== "undefined" && window.location.origin && !window.location.origin.includes("localhost")) {
+      return window.location.origin;
+    }
+    return "https://nibiaanet.nibiaa.com";
+  }, []);
+
+  const getProfileLiveEndpoint = (p) => {
+    const host = (p && p.host && p.host !== "localhost" && p.host !== "127.0.0.1" && p.host !== "0.0.0.0") ? p.host : liveHost;
+    const path = p?.custom_path || (p?.protocol === "webhook" ? "/webhook" : "");
+
+    if (p?.protocol === "webhook") {
+      const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+      const scheme = isHttps ? "https://" : "http://";
+      const cleanPath = path.startsWith("/") ? path : `/${path}`;
+      return `${scheme}${host}${cleanPath}`;
+    } else if (p?.protocol === "mqtt") {
+      return `mqtt://${host}:${p.effective_port || 1883}/${path || "devices/{id}/up"}`;
+    } else if (p?.protocol === "tcp") {
+      return `tcp://${host}:${p.effective_port || 1001}`;
+    } else if (p?.protocol === "udp") {
+      return `udp://${host}:${p.effective_port || 5001}`;
+    }
+    return `${host}:${p?.effective_port}`;
+  };
+
   // Copy connection URI
   const handleCopyUri = (p) => {
-    let uri = "";
-    if (p.protocol === "webhook") {
-      uri = `http://${p.host}:${p.effective_port}${p.custom_path || "/webhook"}`;
-    } else if (p.protocol === "mqtt") {
-      uri = `mqtt://${p.host}:${p.effective_port}/${p.custom_path || "devices/{id}/up"}`;
-    } else if (p.protocol === "tcp") {
-      uri = `tcp://${p.host}:${p.effective_port}`;
-    } else if (p.protocol === "udp") {
-      uri = `udp://${p.host}:${p.effective_port}`;
-    }
+    const uri = getProfileLiveEndpoint(p);
     navigator.clipboard.writeText(uri);
     setCopiedId(p.id);
     setTimeout(() => setCopiedId(null), 2000);
@@ -470,8 +494,8 @@ export default function IngestionProfiles({ api, currentUser }) {
                     <strong>{activePort}</strong>
                   </div>
                   <div className="protocol-meta-row">
-                    <span>Default Host:</span>
-                    <strong>{assignedProfile?.host || "localhost"}</strong>
+                    <span>Live Host:</span>
+                    <strong style={{ color: "var(--primary-text)" }}>{liveHost}</strong>
                   </div>
                   <div className="protocol-meta-row">
                     <span>Port Mode:</span>
@@ -567,8 +591,8 @@ export default function IngestionProfiles({ api, currentUser }) {
                   <th>Protocol</th>
                   <th>Target Provider</th>
                   <th>Value Mode</th>
-                  <th>Host & Port</th>
-                  <th>Path / Topic / Format</th>
+                  <th>Live Gateway Host</th>
+                  <th>Path / Live URI</th>
                   <th>Auth</th>
                   <th>Status</th>
                   <th style={{ textAlign: "right" }}>Actions</th>
@@ -627,17 +651,41 @@ export default function IngestionProfiles({ api, currentUser }) {
                       </td>
 
                       <td style={{ fontFamily: "var(--mono)", fontSize: "12px" }}>
-                        <strong>{p.host}:{p.effective_port}</strong>
+                        <div style={{ fontWeight: 600, color: p.protocol === "webhook" ? "#38bdf8" : "var(--text)" }}>
+                          {p.protocol === "webhook" ? liveHost : `${liveHost}:${p.effective_port}`}
+                        </div>
+                        <div style={{ fontSize: "10.5px", color: "var(--muted)", marginTop: "2px" }}>
+                          {p.protocol === "webhook" ? "Port 443 (HTTPS Gateway)" : `Port ${p.effective_port}`}
+                        </div>
                       </td>
 
                       <td style={{ fontFamily: "var(--mono)", fontSize: "11.5px" }}>
-                        {p.custom_path ? (
+                        {p.protocol === "webhook" ? (
+                          <div>
+                            <span
+                              style={{
+                                padding: "3px 8px",
+                                borderRadius: "4px",
+                                background: "rgba(56, 189, 248, 0.12)",
+                                border: "1px solid rgba(56, 189, 248, 0.3)",
+                                color: "#38bdf8",
+                                display: "inline-block",
+                                wordBreak: "break-all",
+                              }}
+                            >
+                              {p.custom_path || "/webhook"}
+                            </span>
+                            <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: "3px" }}>
+                              {liveOrigin}{p.custom_path || "/webhook"}
+                            </div>
+                          </div>
+                        ) : p.custom_path ? (
                           <span style={{ padding: "2px 6px", borderRadius: "4px", background: "var(--surface-2)", border: "1px solid var(--border)" }}>
                             {p.custom_path}
                           </span>
                         ) : (
                           <span style={{ color: "var(--muted)" }}>
-                            {p.protocol === "mqtt" ? "devices/{id}/up" : p.protocol === "webhook" ? "/webhook" : "Raw socket"}
+                            {p.protocol === "mqtt" ? "devices/{id}/up" : "Raw socket"}
                           </span>
                         )}
                       </td>
@@ -809,11 +857,11 @@ export default function IngestionProfiles({ api, currentUser }) {
         <div className="reference-panel">
           <div className="panel-header">
             <div>
-              <h3>Microservice Ingestion Endpoints (localhost)</h3>
-              <p>Direct connectivity details for third-party gateways and satellite networks.</p>
+              <h3>Live Gateway Ingestion Endpoints ({liveHost})</h3>
+              <p>Public connectivity details for third-party gateways and satellite networks (Hubble Network).</p>
             </div>
-            <span className="tag" style={{ fontSize: "11px", fontFamily: "var(--mono)" }}>
-              {microserviceStatus?.uptime_formatted || "Active"}
+            <span className="tag tag-ok" style={{ fontSize: "11px", fontFamily: "var(--mono)" }}>
+              {liveHost}
             </span>
           </div>
 
@@ -821,34 +869,36 @@ export default function IngestionProfiles({ api, currentUser }) {
             <div className="guide-item">
               <div className="guide-item-top">
                 <strong>1. UDP Datagram Receiver</strong>
-                <code>localhost:5001</code>
+                <code>{liveHost}:5001</code>
               </div>
-              <p>Target: <code>udp://localhost:5001</code>. Send raw binary datagrams or hex frames.</p>
+              <p>Target: <code>udp://{liveHost}:5001</code>. Send raw binary datagrams or hex frames.</p>
             </div>
 
             <div className="guide-item">
               <div className="guide-item-top">
                 <strong>2. MQTT 3.1.1 Broker</strong>
-                <code>localhost:1883</code>
+                <code>{liveHost}:1883</code>
               </div>
-              <p>Target: <code>mqtt://localhost:1883</code>. Publish to: <code>devices/&#123;device_id&#125;/up</code>.</p>
+              <p>Target: <code>mqtt://{liveHost}:1883</code>. Publish to: <code>devices/&#123;device_id&#125;/up</code>.</p>
             </div>
 
             <div className="guide-item">
               <div className="guide-item-top">
                 <strong>3. TCP / IP Socket Stream</strong>
-                <code>localhost:1001</code>
+                <code>{liveHost}:1001</code>
               </div>
-              <p>Target: <code>tcp://localhost:1001</code>. Push newline-delimited JSON or hex strings.</p>
+              <p>Target: <code>tcp://{liveHost}:1001</code>. Push newline-delimited JSON or hex strings.</p>
             </div>
 
             <div className="guide-item">
               <div className="guide-item-top">
-                <strong>4. HTTP Webhook REST Ingestion</strong>
-                <code>localhost:1002 & 3000</code>
+                <strong>4. HTTPS Webhook REST Gateway (Hubble Network)</strong>
+                <code>Port 443 (HTTPS)</code>
               </div>
-              <p>
-                Hubble: <code>POST http://localhost:3000/webhooks/hubble</code> (Basic Auth) or <code>http://localhost:1002/webhook</code>.
+              <p style={{ lineHeight: "1.5" }}>
+                Hubble Webhook URL: <code>{liveOrigin}/webhooks/hubble</code> (with <code>HTTP-X-HUBBLE-TOKEN</code> secret)
+                <br />
+                Generic Webhook: <code>{liveOrigin}/webhook</code>
               </p>
             </div>
           </div>
