@@ -4167,3 +4167,113 @@ html[data-theme="light"] .login-form-card {
   color: var(--text-2);
   margin: 0;
 }
+
+/* =========================================================
+   TTN-Style Split-Screen Decoder & Live Data Workspace
+   ========================================================= */
+
+.ttn-workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 20px;
+  align-items: start;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 1200px) {
+  .ttn-workspace-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ttn-pane-card {
+  background: var(--surface-card, #0e1627);
+  border: 1px solid var(--border-color, #1e293b);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ttn-pulse-dot {
+  width: 9px;
+  height: 9px;
+  background-color: #10b981;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  animation: ttn-pulse 2s infinite;
+}
+
+@keyframes ttn-pulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.ttn-live-card {
+  background: var(--surface-sunken, #080d1a);
+  border: 1px solid var(--border-color, #1e293b);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+
+.ttn-live-card:hover {
+  border-color: rgba(59, 130, 246, 0.5);
+  background: rgba(14, 22, 39, 0.95);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.ttn-live-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.ttn-json-block {
+  background: #020617;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: var(--mono, monospace);
+  font-size: 0.78rem;
+  color: #38bdf8;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.ttn-badge-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  margin-top: 6px;
+}
+
+.ttn-mini-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted, #94a3b8);
+  font-size: 0.72rem;
+}

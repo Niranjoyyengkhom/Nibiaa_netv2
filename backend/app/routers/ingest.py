@@ -214,13 +214,17 @@ def ingest_internal_uplink(
 )
 def list_messages(
     status: str | None = Query(default=None),
+    device_id: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin)
+    current_user: User = Depends(get_current_user)
 ):
+    tenant_id = None if current_user.role == "admin" else current_user.tenant_id
     messages = ingestion_service.list_messages(
         db,
         status=status,
+        tenant_id=tenant_id,
+        device_identifier=device_id,
         limit=limit,
     )
 

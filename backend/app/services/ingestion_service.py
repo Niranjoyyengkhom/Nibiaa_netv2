@@ -144,10 +144,21 @@ class IngestionService:
         self,
         db: Session,
         status: str | None = None,
+        tenant_id: int | None = None,
+        device_identifier: str | None = None,
         limit: int = 100
     ):
         # Staged uplinks, newest first
         query = db.query(DecodedMessage)
+
+        if tenant_id is not None:
+            query = query.filter(DecodedMessage.tenant_id == tenant_id)
+
+        if device_identifier is not None:
+            query = query.filter(
+                (DecodedMessage.device_identifier == device_identifier)
+                | (DecodedMessage.client_id.ilike(f"%{device_identifier}%"))
+            )
 
         if status is not None:
             query = query.filter(DecodedMessage.status == status)
@@ -396,6 +407,31 @@ class IngestionService:
             message.provider
         )
 
+        if profile is None and message.provider:
+            # Check case-insensitively or auto-provision connectivity profile
+            from app.models.connectivity_profile import ConnectivityProfile
+            prov_code = message.provider.strip().lower()
+            profile = (
+                db.query(ConnectivityProfile)
+                .filter(func.lower(ConnectivityProfile.code) == prov_code)
+                .first()
+            )
+            if not profile:
+                conn_type = "NTN" if ("hubble" in prov_code or "sat" in prov_code or "ntn" in prov_code) else "TN"
+                prov_name = "Hubble Network (Satellite BLE)" if prov_code == "hubble" else f"{message.provider.capitalize()} Network"
+                profile = ConnectivityProfile(
+                    code=prov_code,
+                    name=prov_name,
+                    connection_type=conn_type,
+                    integration_status="available",
+                    transport=message.transport or "webhook",
+                    description=f"Auto-configured {message.provider} connectivity profile",
+                    enabled=True,
+                )
+                db.add(profile)
+                db.flush()
+                logger.info("Auto-provisioned connectivity profile '%s' (%s)", prov_code, conn_type)
+
         if profile is None:
 
             # The adapter named a provider that has no profile
@@ -626,6 +662,23 @@ class IngestionService:
                 message.units = units
                 message.decoder_selection = "direct_json"
                 return
+
+            # If not JSON and no schema is matched, do NOT fail the pipeline!
+            # Provide a clean raw payload fallback so the uplink is ROUTED,
+            # stored in telemetry, and visible in Live Data & Decoder Stream!
+            try:
+                hex_str = message.raw_payload.hex() if message.raw_payload else ""
+                message.decoded = {
+                    "raw_hex": hex_str,
+                    "payload_length": len(message.raw_payload) if message.raw_payload else 0,
+                    "raw_bytes": list(message.raw_payload) if message.raw_payload else [],
+                }
+                message.units = {}
+                message.decoder_selection = "raw_fallback"
+                logger.info("No custom decoder matched for device '%s'; using raw decoded fallback", device.device_id)
+                return
+            except Exception as fallback_err:
+                logger.warning("Raw fallback decode failed: %s", fallback_err)
 
             message.status = DecodedMessageStatus.NO_ACTIVE_SCHEMA
             raise IngestError(

@@ -414,6 +414,23 @@ async def ingest_hubble_webhook(
         )
 
         try:
+            # 5b. Ensure ConnectivityProfile exists for hubble
+            from app.models.connectivity_profile import ConnectivityProfile
+            hubble_cp = db.query(ConnectivityProfile).filter(func.lower(ConnectivityProfile.code) == "hubble").first()
+            if not hubble_cp:
+                hubble_cp = ConnectivityProfile(
+                    code="hubble",
+                    name="Hubble Network (Satellite BLE)",
+                    connection_type="NTN" if str(network_type).upper() == "SATELLITE" else "Direct IP",
+                    integration_status="available",
+                    transport="webhook",
+                    description="Global direct-to-satellite Bluetooth Low Energy (BLE) IoT network.",
+                    enabled=True,
+                )
+                db.add(hubble_cp)
+                db.commit()
+                db.refresh(hubble_cp)
+
             # 6. AUTO-REGISTER DEVICE IF NOT REGISTERED
             existing_device = (
                 db.query(Device)
@@ -493,14 +510,12 @@ async def ingest_hubble_webhook(
                 message_ref=str(pkt.get("messageId") or dev_obj.get("counter") or f"hubble-{idx}-{int(rx_time.timestamp())}"),
                 remote_port=443,
                 protocol_id="hubble-webhook",
-                payload_format="json",
+                payload_format="json" if not raw_payload_data else None,
             )
 
-            # Dispatch message for live UI updates
-            try:
-                ingestion_service.dispatch(db, msg)
-            except Exception as disp_err:
-                logger.debug("Dispatch non-blocking error: %s", disp_err)
+            # Dispatch message asynchronously for live subscribers & webhooks
+            if msg and msg.status == DecodedMessageStatus.ROUTED:
+                background_tasks.add_task(ingestion_service.dispatch, msg.id)
 
             results.append({
                 "index": idx,
@@ -509,6 +524,7 @@ async def ingest_hubble_webhook(
                 "message_id": msg.id,
                 "status": msg.status.value if msg and msg.status else "ROUTED",
                 "telemetry_id": getattr(msg, "telemetry_id", None),
+                "decoded": getattr(msg, "decoded", None),
             })
         except Exception as err:
             db.rollback()

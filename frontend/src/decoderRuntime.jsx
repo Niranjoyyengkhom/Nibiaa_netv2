@@ -8,8 +8,38 @@ import { Modal, Notice, Restricted, usePersistentState, RawPayloadCell, RawPaylo
 // the decoded result in the platform database, where the backend reads it
 // (GET /decoder-messages/).
 export const DECODER_API =
-  import.meta.env.VITE_DECODER_API_URL || import.meta.env.VITE_DECODER_API || "http://127.0.0.1:3001";
+  import.meta.env.VITE_DECODER_API_URL ||
+  import.meta.env.VITE_DECODER_API ||
+  (typeof window !== "undefined" && (window.location.port === "8080" || window.location.protocol === "https:" || window.location.hostname !== "localhost")
+    ? "/decoder"
+    : "http://127.0.0.1:3001");
 
+
+export const TTN_TEMPLATE = `function decodeUplink(input) {
+  // TTN (The Things Network) Standard Payload Formatter
+  // input.bytes: Uint8Array of raw payload bytes
+  // input.fPort: LoRaWAN port number
+  const bytes = input.bytes;
+
+  if (!bytes || bytes.length < 2) {
+    return {
+      errors: ["Payload must contain at least 2 bytes"]
+    };
+  }
+
+  // Example decoder for 4-byte payload (temp + hum)
+  const temp = bytes.length >= 2 ? (bytes[0] << 8 | bytes[1]) / 100 : bytes[0];
+  const hum = bytes.length >= 4 ? (bytes[2] << 8 | bytes[3]) / 10 : 50;
+
+  return {
+    data: {
+      temperature: temp,
+      humidity: hum,
+    },
+    warnings: []
+  };
+}
+`;
 
 export const PYTHON_TEMPLATE = `def decode(payload: bytes, context: dict = None) -> dict:
     """
@@ -268,10 +298,37 @@ async function decoderRequest(path, { method = "GET", body } = {}) {
 
 
 // -------------------------
-// Decoders page: write and run
+// Decoders page: write and run (TTN Split-Screen Layout)
 // -------------------------
 
-export function DecoderRunner({ currentUser }) {
+function hexToAsciiStr(hex) {
+  if (!hex) return "";
+  const clean = String(hex).replace(/\s+/g, "");
+  let str = "";
+  for (let i = 0; i < clean.length; i += 2) {
+    const code = parseInt(clean.substring(i, i + 2), 16);
+    if (code >= 32 && code <= 126) {
+      str += String.fromCharCode(code);
+    }
+  }
+  return str;
+}
+
+function formatRelativeTime(dateStr) {
+  if (!dateStr) return "Just now";
+  try {
+    const date = new Date(dateStr);
+    const diff = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (isNaN(diff) || diff < 3) return "Just now";
+    if (diff < 60) return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    return `${Math.floor(diff / 3600)}h ago`;
+  } catch {
+    return "Recent";
+  }
+}
+
+export function DecoderRunner({ currentUser, api }) {
   // Live decoders apply to every matching message, so only admins save them
   const isAdmin = currentUser?.role === "admin";
 
@@ -284,6 +341,14 @@ export function DecoderRunner({ currentUser }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = usePersistentState("decoder.result", null);
   const [notice, setNotice] = useState(null);
+
+  // Live Uplink Stream state (Right Panel - TTN style)
+  const [liveStreamMessages, setLiveStreamMessages] = useState([]);
+  const [liveStreamLoading, setLiveStreamLoading] = useState(false);
+  const [liveStreamFilter, setLiveStreamFilter] = useState("");
+  const [autoRefreshLive, setAutoRefreshLive] = useState(true);
+  const [inspectMessage, setInspectMessage] = useState(null);
+  const [loadHint, setLoadHint] = useState(null);
 
   // Save as live decoder
   const [name, setName] = usePersistentState("decoder.name", "UDP Sensor");
@@ -317,6 +382,112 @@ export function DecoderRunner({ currentUser }) {
       // The run form reports an unreachable server
       setLiveDecoders([]);
     }
+  }
+
+  // Fetch real-time live uplinks for the TTN Right Panel
+  async function refreshLiveStream() {
+    if (!api) return;
+    try {
+      setLiveStreamLoading(true);
+      const [stagedRes, telemetryRes] = await Promise.allSettled([
+        api.get("/ingest/messages", { limit: 50 }),
+        api.get("/telemetry/", { limit: 50 }),
+      ]);
+
+      const staged = stagedRes.status === "fulfilled" && Array.isArray(stagedRes.value) ? stagedRes.value : [];
+      const telemetry = telemetryRes.status === "fulfilled" && Array.isArray(telemetryRes.value) ? telemetryRes.value : [];
+
+      const seen = new Set();
+      const combined = [];
+
+      // 1. Process staged messages (have raw bytes, format, provider)
+      for (const m of staged) {
+        const key = `msg-${m.id}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          combined.push({
+            id: m.id,
+            source: "staged",
+            deviceId: m.device_id || m.device_identifier || "Unknown",
+            deviceName: m.originator_device || m.device_id || m.device_identifier,
+            status: m.status || "ROUTED",
+            provider: m.provider || "hubble",
+            connectionType: m.connection_type || "NTN",
+            transport: m.transport || "webhook",
+            rawPayloadHex: m.raw_payload_hex || "",
+            payloadFormat: m.payload_format || "hex",
+            decoded: m.decoded || null,
+            receivedAt: m.received_at || m.processed_at || new Date().toISOString(),
+            error: m.error || null,
+            details: m,
+          });
+        }
+      }
+
+      // 2. Add telemetry records
+      for (const t of telemetry) {
+        const key = `tel-${t.id}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          combined.push({
+            id: t.id,
+            source: "telemetry",
+            deviceId: t.device_id || "Unknown",
+            deviceName: t.device_name || t.device_id,
+            status: "ROUTED",
+            provider: t.provider || "hubble",
+            connectionType: t.connection_type || "NTN",
+            transport: "telemetry",
+            rawPayloadHex: t.raw_payload_hex || "",
+            payloadFormat: "hex",
+            decoded: t.telemetry || null,
+            receivedAt: t.received_at || t.timestamp || new Date().toISOString(),
+            details: t,
+          });
+        }
+      }
+
+      // Sort newest first
+      combined.sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt));
+      setLiveStreamMessages(combined);
+    } catch (e) {
+      console.debug("Live stream fetch:", e);
+    } finally {
+      setLiveStreamLoading(false);
+    }
+  }
+
+  // Periodic polling for live uplink stream
+  useEffect(() => {
+    refreshLiveStream();
+    if (!autoRefreshLive) return;
+    const interval = setInterval(refreshLiveStream, 3000);
+    return () => clearInterval(interval);
+  }, [api, autoRefreshLive]);
+
+  // Load a live packet from the right panel into the left coding screen
+  function loadIntoDecoder(msg) {
+    if (msg.rawPayloadHex) {
+      const cleanHex = msg.rawPayloadHex.trim();
+      const asciiText = hexToAsciiStr(cleanHex);
+      if (asciiText.trim().startsWith("{") && asciiText.trim().endsWith("}")) {
+        setPayload(asciiText.trim());
+        setFormat("json");
+      } else {
+        setPayload(cleanHex);
+        setFormat("hex");
+      }
+    } else if (msg.decoded) {
+      setPayload(JSON.stringify(msg.decoded, null, 2));
+      setFormat("json");
+    }
+
+    if (msg.deviceId && msg.deviceId !== "Unknown") {
+      setDeviceId(msg.deviceId);
+    }
+
+    setLoadHint(`⚡ Loaded uplink payload from ${msg.deviceId || "device"} into Decoder!`);
+    setTimeout(() => setLoadHint(null), 4000);
   }
 
   async function save(event) {
@@ -396,166 +567,464 @@ export function DecoderRunner({ currentUser }) {
     }
   }
 
-  return (
-    <section className="card">
-      <div className="section-header">
-        <div>
-          <h2>Decoder Runtime</h2>
-          <p>
-            Write <code>function transform(input)</code> and run it on a payload.
-            The payload is converted to bytes and hex first (<code>input.bytes</code>,{" "}
-            <code>input.hex</code>), then decoded to JSON. It runs on the decoder server in a sandbox (no{" "}
-            <code>require</code>, network, files or timers; 500 ms per run).
-            Every run is stored and shown under <strong>Live Data</strong>.
-            Your code and payload are kept while you switch pages.
-          </p>
-        </div>
+  // Filter messages in the live stream
+  const filteredLiveMessages = liveStreamMessages.filter((msg) => {
+    if (!liveStreamFilter.trim()) return true;
+    const term = liveStreamFilter.toLowerCase();
+    return (
+      (msg.deviceId && msg.deviceId.toLowerCase().includes(term)) ||
+      (msg.deviceName && msg.deviceName.toLowerCase().includes(term)) ||
+      (msg.status && msg.status.toLowerCase().includes(term)) ||
+      (msg.provider && msg.provider.toLowerCase().includes(term))
+    );
+  });
 
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => {
-              setCode(JSON_DIRECT_TEMPLATE);
-              setPayload('{"deviceName": "Cold Storage Sensor 01", "deviceType": "Direct IP", "temperature": 24.5, "humidity": 62.0, "battery": 95}');
-              setFormat("json");
-              setResult(null);
+  return (
+    <div className="page-section">
+      {/* TTN SPLIT-SCREEN WORKSPACE */}
+      <div className="ttn-workspace-grid">
+
+        {/* LEFT COLUMN: DECODER CODING SCREEN */}
+        <section className="ttn-pane-card">
+          <div className="section-header" style={{ marginBottom: "14px" }}>
+            <div>
+              <h2 style={{ fontSize: "1.2rem", margin: 0 }}>Payload Decoder (Coding Screen)</h2>
+              <p style={{ margin: "4px 0 0 0", fontSize: "0.82rem", color: "var(--text-muted, #94a3b8)" }}>
+                Write custom code in JavaScript (TTN <code>decodeUplink</code> / ES6) or Python.
+              </p>
+            </div>
+
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="secondary-button small"
+                onClick={() => {
+                  setCode(TTN_TEMPLATE);
+                  setPayload("09C4026C");
+                  setFormat("hex");
+                  setResult(null);
+                }}
+                title="TTN standard decodeUplink(input)"
+              >
+                📦 TTN decodeUplink
+              </button>
+              <button
+                type="button"
+                className="secondary-button small"
+                onClick={() => {
+                  setCode(JSON_DIRECT_TEMPLATE);
+                  setPayload('{"deviceName": "Cold Storage Sensor 01", "deviceType": "Direct IP", "temperature": 24.5, "humidity": 62.0, "battery": 95}');
+                  setFormat("json");
+                  setResult(null);
+                }}
+              >
+                ⚡ JSON Direct
+              </button>
+              <button
+                type="button"
+                className="secondary-button small"
+                onClick={() => {
+                  setCode(PYTHON_JSON_TEMPLATE);
+                  setPayload('{"deviceName": "xiao-69s-MG24", "deviceType": "NTN", "latitude": 17.4354, "longitude": 78.3782, "rssi": -44}');
+                  setFormat("json");
+                  setResult(null);
+                }}
+              >
+                🐍 Python JSON
+              </button>
+              <button
+                type="button"
+                className="secondary-button small"
+                onClick={() => {
+                  setCode(JSON_DYNAMIC_TEMPLATE);
+                  setPayload('{"deviceName": "Smart Temp Sensor", "deviceType": "Direct IP", "data": {"temperature": 23.4, "humidity": 55.2}}');
+                  setFormat("json");
+                  setResult(null);
+                }}
+              >
+                📋 Multi-Format
+              </button>
+              <button
+                type="button"
+                className="secondary-button small"
+                onClick={() => {
+                  setCode(JS_TEMPLATE);
+                  setPayload("0A280258");
+                  setFormat("hex");
+                  setResult(null);
+                }}
+              >
+                🔧 JS Binary
+              </button>
+            </div>
+          </div>
+
+          <form onSubmit={run}>
+            <div className="form-group" style={{ marginBottom: "14px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                <label style={{ margin: 0, fontWeight: 600 }}>Decoder Script</label>
+                <span style={{ fontSize: "0.75rem", color: "var(--text-muted, #94a3b8)" }}>
+                  Supports <code>decodeUplink(input)</code>, <code>transform(input)</code>, or Python <code>decode(input)</code>
+                </span>
+              </div>
+              <textarea
+                className="code-editor"
+                value={code}
+                rows={16}
+                spellCheck={false}
+                onChange={(e) => setCode(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Tab") {
+                    e.preventDefault();
+                    const { selectionStart, selectionEnd } = e.target;
+                    setCode(code.slice(0, selectionStart) + "  " + code.slice(selectionEnd));
+                    requestAnimationFrame(() => {
+                      e.target.selectionStart = e.target.selectionEnd = selectionStart + 2;
+                    });
+                  }
+                }}
+                required
+              />
+            </div>
+
+            {/* TEST RUNNER INPUTS */}
+            <div
+              style={{
+                background: "var(--surface-sunken, #080d1a)",
+                padding: "14px",
+                borderRadius: "8px",
+                border: "1px solid var(--border-color, #1e293b)",
+                marginBottom: "14px",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>🧪 Test Simulation Input</span>
+                {loadHint && (
+                  <span
+                    className="pill pill-ok"
+                    style={{ fontSize: "0.72rem", padding: "2px 8px", animation: "fadein 0.3s" }}
+                  >
+                    {loadHint}
+                  </span>
+                )}
+              </div>
+
+              <div className="form-grid" style={{ gridTemplateColumns: "2fr 1fr 1fr", gap: "10px", marginBottom: "10px" }}>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: "0.75rem" }}>Payload (Hex, JSON, Base64)</label>
+                  <input
+                    value={payload}
+                    placeholder="e.g. 0A280258 or JSON"
+                    onChange={(e) => setPayload(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: "0.75rem" }}>Payload Format</label>
+                  <select value={format} onChange={(e) => setFormat(e.target.value)}>
+                    <option value="auto">Auto-detect</option>
+                    <option value="hex">Hexadecimal</option>
+                    <option value="json">JSON</option>
+                    <option value="base64">Base64</option>
+                    <option value="binary">Binary</option>
+                    <option value="text">UTF-8 Text</option>
+                  </select>
+                </div>
+
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: "0.75rem" }}>Device ID (Context)</label>
+                  <input
+                    value={deviceId}
+                    placeholder="e.g. xiao-69s-MG24"
+                    onChange={(e) => setDeviceId(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                <button className="primary-button" type="submit" disabled={running}>
+                  {running ? "Testing Decoder…" : "⚡ Test Decoder"}
+                </button>
+                <span style={{ fontSize: "0.75rem", color: "var(--text-muted, #94a3b8)" }}>
+                  Dry run sandbox: runs isolated in V8/Python without mutating database
+                </span>
+              </div>
+            </div>
+
+            <Notice notice={notice} />
+          </form>
+
+          {/* TEST RESULTS */}
+          {result && <RunResult result={result} />}
+        </section>
+
+        {/* RIGHT COLUMN: LIVE DATA SCREEN (INBOUND UPLINK STREAM) */}
+        <section className="ttn-pane-card">
+          <div className="section-header" style={{ marginBottom: "14px" }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span className="ttn-pulse-dot" />
+                <h2 style={{ fontSize: "1.2rem", margin: 0 }}>Live Data (Inbound Stream)</h2>
+                <span
+                  className="pill pill-ok"
+                  style={{ fontSize: "0.72rem", padding: "2px 6px", fontWeight: 700 }}
+                >
+                  LIVE
+                </span>
+              </div>
+              <p style={{ margin: "4px 0 0 0", fontSize: "0.82rem", color: "var(--text-muted, #94a3b8)" }}>
+                Incoming packets from Hubble Network, MQTT, UDP, and Webhooks.
+              </p>
+            </div>
+
+            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "0.78rem",
+                  cursor: "pointer",
+                  color: "var(--text-muted, #94a3b8)",
+                  userSelect: "none",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoRefreshLive}
+                  onChange={(e) => setAutoRefreshLive(e.target.checked)}
+                />
+                Auto-poll (3s)
+              </label>
+
+              <button
+                type="button"
+                className="secondary-button small"
+                onClick={refreshLiveStream}
+                disabled={liveStreamLoading}
+              >
+                {liveStreamLoading ? "Refreshing…" : "↻ Refresh"}
+              </button>
+            </div>
+          </div>
+
+          {/* STREAM CONTROLS & FILTER */}
+          <div style={{ display: "flex", gap: "8px", marginBottom: "12px", alignItems: "center" }}>
+            <input
+              type="text"
+              placeholder="🔍 Filter by device ID, name, or provider..."
+              value={liveStreamFilter}
+              onChange={(e) => setLiveStreamFilter(e.target.value)}
+              style={{ fontSize: "0.8rem", padding: "6px 10px" }}
+            />
+            {liveStreamFilter && (
+              <button
+                type="button"
+                className="secondary-button small"
+                onClick={() => setLiveStreamFilter("")}
+              >
+                Clear
+              </button>
+            )}
+            <span
+              style={{
+                fontSize: "0.75rem",
+                color: "var(--text-muted, #94a3b8)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {filteredLiveMessages.length} uplinks
+            </span>
+          </div>
+
+          {/* REAL-TIME PACKET CARDS */}
+          <div
+            style={{
+              maxHeight: "680px",
+              overflowY: "auto",
+              paddingRight: "4px",
+              scrollbarWidth: "thin",
             }}
           >
-            ⚡ JSON Direct Variables
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => {
-              setCode(PYTHON_JSON_TEMPLATE);
-              setPayload('{"deviceName": "Cold Storage Sensor 01", "deviceType": "Direct IP", "temperature": 24.5, "humidity": 62.0, "battery": 95}');
-              setFormat("json");
-              setResult(null);
-            }}
-          >
-            🐍 Python JSON
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => {
-              setCode(JSON_DYNAMIC_TEMPLATE);
-              setPayload('{"deviceName": "Smart Temp Sensor", "deviceType": "Direct IP", "data": {"temperature": 23.4, "humidity": 55.2}}');
-              setFormat("json");
-              setResult(null);
-            }}
-          >
-            📋 Multi-Format Dynamic
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => {
-              setCode(PYTHON_TEMPLATE);
-              setPayload("09C4026C");
-              setFormat("hex");
-              setResult(null);
-            }}
-          >
-            🐍 Python Binary
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => {
-              setCode(JS_TEMPLATE);
-              setPayload("0A280258");
-              setFormat("hex");
-              setResult(null);
-            }}
-          >
-            JS Binary
-          </button>
-        </div>
+            {filteredLiveMessages.length === 0 ? (
+              <div
+                style={{
+                  textAlign: "center",
+                  padding: "40px 20px",
+                  background: "var(--surface-sunken, #080d1a)",
+                  borderRadius: "8px",
+                  border: "1px dashed var(--border-color, #1e293b)",
+                  color: "var(--text-muted, #94a3b8)",
+                }}
+              >
+                <div style={{ fontSize: "1.8rem", marginBottom: "8px" }}>📡</div>
+                <strong style={{ display: "block", color: "var(--text)", marginBottom: "4px" }}>
+                  Waiting for incoming uplinks…
+                </strong>
+                <p style={{ margin: 0, fontSize: "0.82rem" }}>
+                  When your device (e.g. <code>xiao-69s-MG24</code>) transmits through Hubble Network or webhooks,
+                  its live packets, raw payload, and decoded data appear here automatically.
+                </p>
+              </div>
+            ) : (
+              filteredLiveMessages.map((msg) => {
+                const isRouted = msg.status === "ROUTED";
+                const hasDecoded = msg.decoded && typeof msg.decoded === "object" && Object.keys(msg.decoded).length > 0;
+                const locLat = msg.decoded?.latitude ?? msg.details?.latitude;
+                const locLon = msg.decoded?.longitude ?? msg.details?.longitude;
+                const alt = msg.decoded?.altitude ?? msg.details?.altitude;
+                const rssi = msg.decoded?.rssi ?? msg.details?.rssi;
+                const counter = msg.decoded?.counter ?? msg.details?.counter ?? msg.details?.sequence_number;
+
+                return (
+                  <div key={`${msg.source}-${msg.id}`} className="ttn-live-card">
+                    {/* CARD HEADER */}
+                    <div className="ttn-live-card-header">
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span className={`pill ${isRouted ? "pill-ok" : "pill-off"}`} style={{ fontSize: "0.72rem", padding: "1px 7px" }}>
+                          {isRouted ? "ROUTED" : (msg.status || "DECODE_FAILED")}
+                        </span>
+                        <strong style={{ fontSize: "0.85rem", color: "var(--text, #f8fafc)" }}>
+                          {msg.deviceName || msg.deviceId}
+                        </strong>
+                        {msg.deviceName && msg.deviceName !== msg.deviceId && (
+                          <span style={{ fontSize: "0.75rem", color: "var(--text-muted, #94a3b8)" }}>
+                            ({msg.deviceId})
+                          </span>
+                        )}
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span
+                          className="ttn-mini-badge"
+                          style={{
+                            background: "rgba(59, 130, 246, 0.15)",
+                            color: "#60a5fa",
+                            borderColor: "rgba(59, 130, 246, 0.3)",
+                          }}
+                        >
+                          🛰️ {msg.provider || "Hubble Network"}
+                        </span>
+                        <span style={{ fontSize: "0.72rem", color: "var(--text-muted, #94a3b8)" }}>
+                          {formatRelativeTime(msg.receivedAt)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* METADATA BADGES */}
+                    <div className="ttn-badge-row">
+                      {rssi !== undefined && (
+                        <span className="ttn-mini-badge">
+                          📶 RSSI: {rssi} dBm
+                        </span>
+                      )}
+                      {counter !== undefined && (
+                        <span className="ttn-mini-badge">
+                          # Count: {counter}
+                        </span>
+                      )}
+                      {locLat !== undefined && locLon !== undefined && (
+                        <span className="ttn-mini-badge" style={{ color: "#34d399", borderColor: "rgba(52, 211, 153, 0.3)" }}>
+                          📍 {Number(locLat).toFixed(4)}, {Number(locLon).toFixed(4)} {alt ? `(${Math.round(alt)}m)` : ""}
+                        </span>
+                      )}
+                      <span className="ttn-mini-badge">
+                        {msg.connectionType || "NTN"} · {msg.transport || "webhook"}
+                      </span>
+                    </div>
+
+                    {/* RAW PAYLOAD DISPLAY */}
+                    {msg.rawPayloadHex && (
+                      <div style={{ marginTop: "8px" }}>
+                        <span style={{ fontSize: "0.72rem", color: "var(--text-muted, #94a3b8)", display: "block", marginBottom: "2px" }}>
+                          Raw Payload Hex:
+                        </span>
+                        <code
+                          style={{
+                            fontSize: "0.75rem",
+                            background: "rgba(0,0,0,0.3)",
+                            padding: "3px 6px",
+                            borderRadius: "4px",
+                            color: "#cbd5e1",
+                            wordBreak: "break-all",
+                            display: "block",
+                          }}
+                        >
+                          {msg.rawPayloadHex}
+                        </code>
+                      </div>
+                    )}
+
+                    {/* DECODED OUTPUT JSON */}
+                    <div style={{ marginTop: "8px" }}>
+                      <span style={{ fontSize: "0.72rem", color: "#38bdf8", fontWeight: 600, display: "block", marginBottom: "2px" }}>
+                        Decoded Output JSON:
+                      </span>
+                      {hasDecoded ? (
+                        <pre className="ttn-json-block">
+                          {JSON.stringify(msg.decoded, null, 2)}
+                        </pre>
+                      ) : (
+                        <div
+                          style={{
+                            fontSize: "0.75rem",
+                            color: "var(--text-muted, #94a3b8)",
+                            background: "rgba(0,0,0,0.2)",
+                            padding: "6px 8px",
+                            borderRadius: "4px",
+                            fontStyle: "italic",
+                          }}
+                        >
+                          {msg.error || "No decoded fields. Load into Decoder above to write decoder."}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ACTIONS */}
+                    <div style={{ display: "flex", gap: "8px", marginTop: "10px", justifyContent: "flex-end" }}>
+                      <button
+                        type="button"
+                        className="primary-button small"
+                        style={{ padding: "4px 10px", fontSize: "0.75rem" }}
+                        onClick={() => loadIntoDecoder(msg)}
+                        title="Load this packet's payload and device ID into the code editor above"
+                      >
+                        ⚡ Load into Decoder
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button small"
+                        style={{ padding: "4px 10px", fontSize: "0.75rem" }}
+                        onClick={() => setInspectMessage(msg.details || msg)}
+                      >
+                        🔍 Inspect
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
       </div>
 
-      <form onSubmit={run}>
-        <div className="form-group spaced">
-          <label style={{ marginBottom: "6px" }}>Code (Python or JavaScript)</label>
-          <textarea
-            className="code-editor"
-            value={code}
-            rows={18}
-            spellCheck={false}
-            onChange={(e) => setCode(e.target.value)}
-            onKeyDown={(e) => {
-              // Tab inserts two spaces instead of leaving the editor
-              if (e.key === "Tab") {
-                e.preventDefault();
-                const { selectionStart, selectionEnd } = e.target;
-                setCode(code.slice(0, selectionStart) + "  " + code.slice(selectionEnd));
-                requestAnimationFrame(() => {
-                  e.target.selectionStart = e.target.selectionEnd = selectionStart + 2;
-                });
-              }
-            }}
-            required
-          />
-          <span className="muted small-text">
-            Return an object of values, e.g. {"{ temperature: 21.5 }"}.
-          </span>
-        </div>
+      {/* INSPECT MODAL */}
+      {inspectMessage && (
+        <MessageModal
+          message={inspectMessage}
+          onClose={() => setInspectMessage(null)}
+        />
+      )}
 
-        <div className="form-grid">
-          <div className="form-group">
-            <label>Payload</label>
-            <input
-              value={payload}
-              placeholder={{ json: '{"temp": 24.5, "hum": 62}', hex: "09C4026C", binary: "00001001110001000000001001101100", base64: "CigCWA==", text: "temp=26.4,hum=60" }[format] || "0A280258"}
-              onChange={(e) => setPayload(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label>Payload Format</label>
-            <select value={format} onChange={(e) => setFormat(e.target.value)}>
-              <option value="auto">Auto (Hex, Binary, Base64, JSON)</option>
-              <option value="json">JSON (Object or String)</option>
-              <option value="hex">Hex (Hexadecimal)</option>
-              <option value="binary">Binary (Bits or Bytes)</option>
-              <option value="base64">Base64</option>
-              <option value="text">Text (UTF-8)</option>
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label>Device ID (optional)</label>
-            <input
-              value={deviceId}
-              placeholder="MAIN-01"
-              onChange={(e) => setDeviceId(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <Notice notice={notice} />
-
-        <button className="primary-button" type="submit" disabled={running}>
-          {running ? "Running…" : "Run"}
-        </button>
-      </form>
-
-      {result && <RunResult result={result} />}
-
-      {/* SAVE AS LIVE DECODER */}
-
-      <div className="schema-section">
+      {/* SAVE AS LIVE DECODER CONFIGURATION */}
+      <section className="card" style={{ marginTop: "24px" }}>
         <div className="schema-title">
           <div>
-            <h3>Live Decoder</h3>
+            <h3>Live Decoder Version Registry</h3>
             <p>
-              Save the code above to decode received messages (HTTPS, MQTT, TCP/IP, UDP, Webhook, Custom)
-              whose routing context fits the match, e.g. Protocol{" "}
-              <code>udp</code>, <code>mqtt</code>, or <code>https</code>.
-              Saving an existing name creates its next version; it is used for
-              new messages at once.
+              Save the code written in the left editor as a permanent live decoder version. It will automatically decode
+              incoming packets (HTTPS, MQTT, TCP/IP, UDP, Webhook) matching the configured criteria.
             </p>
           </div>
         </div>
@@ -564,7 +1033,7 @@ export function DecoderRunner({ currentUser }) {
           <form onSubmit={save}>
             <div className="form-grid">
               <div className="form-group">
-                <label>Name</label>
+                <label>Decoder Name</label>
                 <input value={name} onChange={(e) => setName(e.target.value)} required />
               </div>
 
@@ -625,7 +1094,7 @@ export function DecoderRunner({ currentUser }) {
           </form>
         ) : (
           <Restricted>
-            Only admins can save live decoders. You can still run code above.
+            Only admins can save live decoders. You can still test code in the editor above.
           </Restricted>
         )}
 
@@ -676,8 +1145,8 @@ export function DecoderRunner({ currentUser }) {
             </table>
           </div>
         )}
-      </div>
-    </section>
+      </section>
+    </div>
   );
 }
 

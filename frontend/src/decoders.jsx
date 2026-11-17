@@ -457,9 +457,9 @@ function Decoders({ api, currentUser }) {
         description="Turn raw uplink bytes into values with JavaScript. A device uses its application's decoder; otherwise the live decoder whose match fits best."
       />
 
-      {/* WRITE AND RUN (decoder runtime) */}
+      {/* WRITE AND RUN (TTN Split-Screen Decoder & Live Stream) */}
 
-      <DecoderRunner currentUser={currentUser} />
+      <DecoderRunner currentUser={currentUser} api={api} />
 
       {/* LIST */}
 

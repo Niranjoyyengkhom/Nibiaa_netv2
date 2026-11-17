@@ -4,9 +4,23 @@
 // token is no longer accepted (expired, or the user / organization was
 // revoked), so the app signs out and shows the reason on the login page.
 
-export const API = import.meta.env.VITE_API_URL || (typeof window !== "undefined" && window.location.port === "8080" ? "/api" : "http://127.0.0.1:3002");
-export const DECODER_API = import.meta.env.VITE_DECODER_API_URL || (typeof window !== "undefined" && window.location.port === "8080" ? "/decoder" : "http://127.0.0.1:3001");
-export const IAM_API = import.meta.env.VITE_IAM_API_URL || (typeof window !== "undefined" && window.location.port === "8080" ? "/iam" : "http://127.0.0.1:3003");
+export const API =
+  import.meta.env.VITE_API_URL ||
+  (typeof window !== "undefined" && (window.location.port === "8080" || window.location.protocol === "https:" || window.location.hostname !== "localhost")
+    ? "/api"
+    : "http://127.0.0.1:3002");
+
+export const DECODER_API =
+  import.meta.env.VITE_DECODER_API_URL ||
+  (typeof window !== "undefined" && (window.location.port === "8080" || window.location.protocol === "https:" || window.location.hostname !== "localhost")
+    ? "/decoder"
+    : "http://127.0.0.1:3001");
+
+export const IAM_API =
+  import.meta.env.VITE_IAM_API_URL ||
+  (typeof window !== "undefined" && (window.location.port === "8080" || window.location.protocol === "https:" || window.location.hostname !== "localhost")
+    ? "/iam"
+    : "http://127.0.0.1:3003");
 
 
 // FastAPI returns a string for HTTPException

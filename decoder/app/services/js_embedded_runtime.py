@@ -43,7 +43,7 @@ var console = {
 
 function __runDecoderWrapper(fn, input) {
     if (typeof fn !== 'function') {
-        throw new Error("Decoder must define function 'decode(input)' or 'transform(input)'");
+        throw new Error("Decoder must define function 'decode(input)', 'transform(input)', or 'decodeUplink(input)'");
     }
     // Direct variable assignment for incoming JSON payloads (no byte decoding needed)
     if (input && input.json && typeof input.json === 'object' && !Array.isArray(input.json)) {
@@ -87,9 +87,9 @@ class EmbeddedJsEngine:
         check_script = f"""
         {JS_PRELUDE}
         {code}
-        var __fn = (typeof decode === 'function' ? decode : (typeof transform === 'function' ? transform : null));
+        var __fn = (typeof decode === 'function' ? decode : (typeof transform === 'function' ? transform : (typeof decodeUplink === 'function' ? decodeUplink : null)));
         if (!__fn) {{
-            throw new Error("Code must define function 'decode(input)' or 'transform(input)'");
+            throw new Error("Code must define function 'decode(input)', 'transform(input)', or 'decodeUplink(input)'");
         }}
         """
         try:
@@ -181,7 +181,7 @@ class EmbeddedJsEngine:
         execution_script = f"""
         {JS_PRELUDE}
         {code}
-        var __fn = (typeof decode === 'function' ? decode : (typeof transform === 'function' ? transform : null));
+        var __fn = (typeof decode === 'function' ? decode : (typeof transform === 'function' ? transform : (typeof decodeUplink === 'function' ? decodeUplink : null)));
         __runDecoderWrapper(__fn, {input_json_str});
         """
 
