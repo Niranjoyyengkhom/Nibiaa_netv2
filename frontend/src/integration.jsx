@@ -205,7 +205,7 @@ function Integration({ api, currentUser }) {
         qos: parseInt(mqttConfig.qos, 10) || 1,
         use_tls: !!mqttConfig.use_tls,
       };
-      const res = await api.post("/mqtt/config", { body: payload });
+      const res = await api.post("/mqtt/config", payload);
       setMqttConfig((prev) => ({
         ...prev,
         ...res,
@@ -239,7 +239,7 @@ function Integration({ api, currentUser }) {
         use_tls: !!mqttConfig.use_tls,
         topic: "nibiaanet/test/ping",
       };
-      const res = await api.post("/mqtt/test", { body: payload });
+      const res = await api.post("/mqtt/test", payload);
       if (res.success) {
         setMqttTestNotice({ type: "success", text: res.message });
       } else {
