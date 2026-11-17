@@ -731,6 +731,20 @@ class IngestionService:
         units = data.pop("units", {}) if isinstance(data.get("units"), dict) else {}
         return dict(data), {str(k): str(v) for k, v in units.items()}
 
+    def _is_user_defined_schema(self, schema) -> bool:
+        """Returns True if the schema was created by the user and is not the default demo decoder."""
+        if not schema:
+            return False
+        # Sample seeded decoders have id == 1 or name == "environmental_sensors"
+        if getattr(schema, "id", None) == 1 or getattr(schema, "name", "") == "environmental_sensors":
+            return False
+        # User defined decoders are either custom JS/Python scripts or custom schemas
+        if getattr(schema, "kind", None) in ("javascript", "python"):
+            return True
+        if getattr(schema, "created_by", None) is not None:
+            return True
+        return getattr(schema, "id", 0) > 1
+
     def _select_decoder(
         self,
         db: Session,
@@ -738,17 +752,19 @@ class IngestionService:
         device: Device,
         application: Application
     ):
-        """
-        Dynamically chooses decoder based on:
-        1. Device Type Decoders configured for this device's application & device type:
-           - Exact payload format match (json, hex, binary, base64)
-           - Any-format / general decoder assigned to the device type
-        2. Exact match on payload format + routing criteria
-        3. Application's assigned fallback decoder (if compatible)
-        4. Match on other attributes without format restriction
-        5. Application's default decoder fallback
-        """
         detected_fmt = (getattr(message, "payload_format", None) or "binary").strip().lower()
+
+        # =========================================================================
+        # PRIORITY 0: Check if Application has a User-Defined Decoder assigned
+        # =========================================================================
+        if application.decode_schema_id is not None:
+            app_schema = self.decode_schema_service.get_schema_for_application(
+                db, application.decode_schema_id
+            )
+            if app_schema and self._is_user_defined_schema(app_schema):
+                if not (detected_fmt == "json" and app_schema.kind == "fields"):
+                    message.decoder_selection = f"user_defined_application_{app_schema.name}"
+                    return app_schema
 
         # 1. Device Type Decoders: Lookup device type under this application
         from app.models.device_type import DeviceType
@@ -862,6 +878,28 @@ class IngestionService:
             device.tenant_id,
             attrs_without_fmt
         )
+        if schema is not None and self._is_user_defined_schema(schema):
+            if not (detected_fmt == "json" and schema.kind == "fields"):
+                message.decoder_selection = f"user_defined_match_{schema.name}"
+                return schema
+
+        # 5b. PRIORITY: Check if ANY active user-defined decoder exists in the platform registry
+        active_user_schema = (
+            db.query(DecodeSchema)
+            .join(DecodeSchemaActivation, DecodeSchemaActivation.schema_id == DecodeSchema.id)
+            .filter(
+                DecodeSchemaActivation.deactivated_at.is_(None),
+                DecodeSchema.id != 1,
+                DecodeSchema.name != "environmental_sensors",
+            )
+            .order_by(DecodeSchema.id.desc())
+            .first()
+        )
+        if active_user_schema:
+            if not (detected_fmt == "json" and active_user_schema.kind == "fields"):
+                message.decoder_selection = f"user_defined_registry_{active_user_schema.name}"
+                return active_user_schema
+
         if schema is not None:
             if not (detected_fmt == "json" and schema.kind == "fields"):
                 message.decoder_selection = "match_fallback"
