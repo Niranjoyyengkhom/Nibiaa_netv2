@@ -110,6 +110,8 @@ services:
       UDP_PORT: 5005
       UDP_INGEST_ENABLED: "true"
       ALLOWED_ORIGINS: "*"
+    volumes:
+      - ./decoder/app:/app/app:ro
     ports:
       - "3001:3001"
       - "5005:5005/udp"

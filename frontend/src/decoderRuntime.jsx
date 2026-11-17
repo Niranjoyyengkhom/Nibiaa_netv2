@@ -653,7 +653,7 @@ export function DecoderRunner({ currentUser, api }) {
 
   async function refreshDecoders() {
     try {
-      setLiveDecoders(await decoderRequest("/decoders"));
+      setLiveDecoders(await decoderRequest("/decoders/"));
     } catch {
       // The run form reports an unreachable server
       setLiveDecoders([]);
@@ -785,7 +785,7 @@ export function DecoderRunner({ currentUser, api }) {
     setSaveNotice(null);
 
     try {
-      const saved = await decoderRequest("/decoders", {
+      const saved = await decoderRequest("/decoders/", {
         method: "POST",
         body: { name: name.trim(), code, match },
       });
