@@ -4,6 +4,7 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
 ENV PORT=3000
 
 # Install Node.js for sandboxed JS decoder execution and native compilation headers for python extensions (cassandra-driver)
