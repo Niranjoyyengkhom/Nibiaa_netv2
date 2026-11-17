@@ -5,13 +5,13 @@
     }
 }
 
-# NibiaaNet Production Domains and Server IP (Self-Signed CA SSL)
-nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com, 34.122.43.248, localhost {
-    tls /etc/caddy/certs/server.crt /etc/caddy/certs/server.key
+# Redirect direct IP access to primary domain
+http://34.122.43.248, 34.122.43.248 {
+    redir https://nibiaanet.nibiaa.com{uri} permanent
+}
 
-    # Clear cached HTTP/3 QUIC in Chrome and prevent QUIC protocol errors
-    header Alt-Svc "clear"
-
+# Official Public SSL (Let's Encrypt / ZeroSSL)
+nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com {
     # Webhook Ingestion endpoints for Hubble Network and 3rd party gateways
     handle /webhook* {
         reverse_proxy protocol_ingestion:1002
