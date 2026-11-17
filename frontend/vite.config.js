@@ -31,6 +31,7 @@ export default defineConfig({
       "/decoder": {
         target: process.env.VITE_DECODER_TARGET || "http://127.0.0.1:3001",
         changeOrigin: true,
+        autoRewrite: true,
         rewrite: (path) => path.replace(/^\/decoder/, ""),
       },
       "/iam": {

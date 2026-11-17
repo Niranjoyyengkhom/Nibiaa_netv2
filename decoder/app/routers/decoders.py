@@ -11,6 +11,7 @@ from app.services.validator import validate_script
 router = APIRouter(prefix="/decoders", tags=["Decoders"])
 
 
+@router.get("", response_model=List[DecoderResponse])
 @router.get("/", response_model=List[DecoderResponse])
 def list_live_decoders(db: Session = Depends(get_db)):
     decoders = (
@@ -45,6 +46,7 @@ def list_live_decoders(db: Session = Depends(get_db)):
     return result
 
 
+@router.post("", response_model=DecoderResponse)
 @router.post("/", response_model=DecoderResponse)
 def save_decoder(req: DecoderCreateRequest, db: Session = Depends(get_db)):
     name = req.name.strip()
@@ -116,6 +118,7 @@ def save_decoder(req: DecoderCreateRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/{decoder_id}", response_model=DecoderResponse)
+@router.get("/{decoder_id}/", response_model=DecoderResponse)
 def get_decoder(decoder_id: str, db: Session = Depends(get_db)):
     decoder = db.query(DecoderDefinition).filter(DecoderDefinition.id == decoder_id).first()
     if not decoder:
@@ -145,6 +148,7 @@ def get_decoder(decoder_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/{decoder_id}", status_code=204)
+@router.delete("/{decoder_id}/", status_code=204)
 def delete_decoder(decoder_id: str, db: Session = Depends(get_db)):
     decoder = db.query(DecoderDefinition).filter(DecoderDefinition.id == decoder_id).first()
     if not decoder:

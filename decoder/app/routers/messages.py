@@ -55,6 +55,7 @@ def register_device_via_decoder(req: DeviceRegisterRequest, db: Session = Depend
 
 
 
+@router.get("", response_model=MessageListResponse)
 @router.get("/", response_model=MessageListResponse)
 def list_messages(
     deviceId: Optional[str] = Query(None),
