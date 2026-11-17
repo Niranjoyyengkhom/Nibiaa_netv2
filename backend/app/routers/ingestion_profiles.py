@@ -192,6 +192,8 @@ def list_ingestion_profiles(db: Session = Depends(get_db)):
             "auth_username": p.auth_username,
             "auth_password": "***" if p.auth_password else None,
             "has_password": bool(p.auth_password),
+            "auth_token": "***" if p.auth_token else None,
+            "has_token": bool(p.auth_token),
             "custom_path": p.custom_path,
             "is_enabled": p.is_enabled,
             "description": p.description,
@@ -269,6 +271,8 @@ def update_ingestion_profile(
         profile.auth_username = data.auth_username
     if data.auth_password is not None and data.auth_password != "***":
         profile.auth_password = data.auth_password
+    if data.auth_token is not None and data.auth_token != "***":
+        profile.auth_token = data.auth_token
     if data.custom_path is not None:
         profile.custom_path = data.custom_path
     profile.is_enabled = data.is_enabled

@@ -70,6 +70,7 @@ export default function IngestionProfiles({ api, currentUser }) {
     auth_type: "none",
     auth_username: "",
     auth_password: "",
+    auth_token: "",
     custom_path: "",
     is_enabled: true,
     description: "",
@@ -88,6 +89,7 @@ export default function IngestionProfiles({ api, currentUser }) {
     auth_type: "none",
     auth_username: "",
     auth_password: "",
+    auth_token: "",
     custom_path: "/webhooks/custom",
     is_enabled: true,
     description: "",
@@ -206,6 +208,7 @@ export default function IngestionProfiles({ api, currentUser }) {
       auth_type: p.auth_type || "none",
       auth_username: p.auth_username || "",
       auth_password: p.has_password ? "***" : "",
+      auth_token: p.has_token ? "***" : (p.auth_token || ""),
       custom_path: p.custom_path || "",
       is_enabled: p.is_enabled ?? true,
       description: p.description || "",
@@ -227,6 +230,7 @@ export default function IngestionProfiles({ api, currentUser }) {
         auth_type: editForm.auth_type,
         auth_username: editForm.auth_username || null,
         auth_password: editForm.auth_password || null,
+        auth_token: editForm.auth_token || null,
         custom_path: editForm.custom_path || null,
         is_enabled: Boolean(editForm.is_enabled),
         description: editForm.description || null,
@@ -260,6 +264,7 @@ export default function IngestionProfiles({ api, currentUser }) {
         auth_type: addForm.auth_type,
         auth_username: addForm.auth_username || null,
         auth_password: addForm.auth_password || null,
+        auth_token: addForm.auth_token || null,
         custom_path: addForm.custom_path || null,
         is_enabled: Boolean(addForm.is_enabled),
         description: addForm.description || null,
@@ -638,14 +643,21 @@ export default function IngestionProfiles({ api, currentUser }) {
                       </td>
 
                       <td>
-                        {p.auth_type === "none" ? (
+                        {p.auth_type === "none" && !p.has_token ? (
                           <span style={{ color: "var(--muted)", fontSize: "12px" }}>Open (None)</span>
                         ) : (
                           <div>
-                            <span className="tag" style={{ fontSize: "11px" }}>{p.auth_type}</span>
+                            <span className="tag" style={{ fontSize: "11px" }}>
+                              {p.auth_type === "hubble_secret" ? "Hubble Secret" : p.auth_type}
+                            </span>
                             {p.auth_username && (
                               <div style={{ fontFamily: "var(--mono)", fontSize: "10.5px", color: "var(--muted)", marginTop: "2px" }}>
                                 {p.auth_username}
+                              </div>
+                            )}
+                            {p.has_token && (
+                              <div style={{ fontFamily: "var(--mono)", fontSize: "10px", color: "#60a5fa", marginTop: "2px" }}>
+                                Secret: ••••••••
                               </div>
                             )}
                           </div>
@@ -1007,6 +1019,7 @@ export default function IngestionProfiles({ api, currentUser }) {
                       onChange={(e) => setAddForm({ ...addForm, auth_type: e.target.value })}
                     >
                       <option value="none">None (Open)</option>
+                      <option value="hubble_secret">Hubble Webhook Secret (HTTP-X-HUBBLE-TOKEN)</option>
                       <option value="basic_auth">Basic Auth</option>
                       <option value="token">Bearer Token</option>
                     </select>
@@ -1019,7 +1032,7 @@ export default function IngestionProfiles({ api, currentUser }) {
                       value={addForm.auth_username}
                       onChange={(e) => setAddForm({ ...addForm, auth_username: e.target.value })}
                       placeholder="Optional"
-                      disabled={addForm.auth_type === "none"}
+                      disabled={addForm.auth_type === "none" || addForm.auth_type === "hubble_secret"}
                     />
                   </div>
 
@@ -1030,10 +1043,51 @@ export default function IngestionProfiles({ api, currentUser }) {
                       value={addForm.auth_password}
                       onChange={(e) => setAddForm({ ...addForm, auth_password: e.target.value })}
                       placeholder="Optional"
-                      disabled={addForm.auth_type === "none"}
+                      disabled={addForm.auth_type === "none" || addForm.auth_type === "hubble_secret"}
                     />
                   </div>
                 </div>
+
+                {/* Dedicated Hubble Webhook Secret when Webhook is chosen */}
+                {(addForm.protocol === "webhook" || addForm.auth_type === "hubble_secret") && (
+                  <div
+                    className="field"
+                    style={{
+                      marginTop: "12px",
+                      padding: "12px 14px",
+                      background: "rgba(59, 130, 246, 0.08)",
+                      border: "1px solid rgba(59, 130, 246, 0.25)",
+                      borderRadius: "8px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+                      <label style={{ fontWeight: "600", color: "var(--text)", margin: 0 }}>
+                        Hubble Webhook Secret
+                      </label>
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          fontFamily: "var(--mono)",
+                          padding: "2px 8px",
+                          borderRadius: "4px",
+                          background: "rgba(59, 130, 246, 0.2)",
+                          color: "#60a5fa",
+                        }}
+                      >
+                        HTTP-X-HUBBLE-TOKEN
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      value={addForm.auth_token}
+                      onChange={(e) => setAddForm({ ...addForm, auth_token: e.target.value, auth_type: addForm.auth_type === "none" ? "hubble_secret" : addForm.auth_type })}
+                      placeholder="e.g. whsec_... (copied from Hubble Network Portal)"
+                    />
+                    <small style={{ color: "var(--muted)", fontSize: "11.5px", marginTop: "5px", display: "block", lineHeight: "1.4" }}>
+                      Paste the webhook secret generated in your Hubble Network account. NibiaaNet will automatically authenticate incoming satellite packets carrying this secret in the <code>HTTP-X-HUBBLE-TOKEN</code> header.
+                    </small>
+                  </div>
+                )}
 
                 <div className="checkbox-field">
                   <input
@@ -1181,6 +1235,7 @@ export default function IngestionProfiles({ api, currentUser }) {
                       onChange={(e) => setEditForm({ ...editForm, auth_type: e.target.value })}
                     >
                       <option value="none">None (Open)</option>
+                      <option value="hubble_secret">Hubble Webhook Secret (HTTP-X-HUBBLE-TOKEN)</option>
                       <option value="basic_auth">Basic Auth</option>
                       <option value="token">Bearer Token</option>
                     </select>
@@ -1193,6 +1248,7 @@ export default function IngestionProfiles({ api, currentUser }) {
                       value={editForm.auth_username}
                       onChange={(e) => setEditForm({ ...editForm, auth_username: e.target.value })}
                       placeholder="Optional"
+                      disabled={editForm.auth_type === "none" || editForm.auth_type === "hubble_secret"}
                     />
                   </div>
 
@@ -1203,9 +1259,51 @@ export default function IngestionProfiles({ api, currentUser }) {
                       value={editForm.auth_password}
                       onChange={(e) => setEditForm({ ...editForm, auth_password: e.target.value })}
                       placeholder="Optional"
+                      disabled={editForm.auth_type === "none" || editForm.auth_type === "hubble_secret"}
                     />
                   </div>
                 </div>
+
+                {/* Dedicated Hubble Webhook Secret when Webhook is chosen */}
+                {(editForm.protocol === "webhook" || editForm.auth_type === "hubble_secret") && (
+                  <div
+                    className="field"
+                    style={{
+                      marginTop: "12px",
+                      padding: "12px 14px",
+                      background: "rgba(59, 130, 246, 0.08)",
+                      border: "1px solid rgba(59, 130, 246, 0.25)",
+                      borderRadius: "8px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+                      <label style={{ fontWeight: "600", color: "var(--text)", margin: 0 }}>
+                        Hubble Webhook Secret
+                      </label>
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          fontFamily: "var(--mono)",
+                          padding: "2px 8px",
+                          borderRadius: "4px",
+                          background: "rgba(59, 130, 246, 0.2)",
+                          color: "#60a5fa",
+                        }}
+                      >
+                        HTTP-X-HUBBLE-TOKEN
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      value={editForm.auth_token}
+                      onChange={(e) => setEditForm({ ...editForm, auth_token: e.target.value, auth_type: editForm.auth_type === "none" ? "hubble_secret" : editForm.auth_type })}
+                      placeholder={editForm.auth_token === "***" ? "•••••••• (unchanged)" : "e.g. whsec_... (copied from Hubble Network Portal)"}
+                    />
+                    <small style={{ color: "var(--muted)", fontSize: "11.5px", marginTop: "5px", display: "block", lineHeight: "1.4" }}>
+                      Paste the webhook secret generated in your Hubble Network account. NibiaaNet will automatically authenticate incoming satellite packets carrying this secret in the <code>HTTP-X-HUBBLE-TOKEN</code> header.
+                    </small>
+                  </div>
+                )}
 
                 <div className="checkbox-field">
                   <input

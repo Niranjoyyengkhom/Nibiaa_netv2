@@ -228,6 +228,7 @@ services:
       VITE_INGESTION_TARGET: http://protocol_ingestion:1002
     volumes:
       - ./frontend/vite.config.js:/app/vite.config.js:ro
+      - ./frontend/src:/app/src:ro
     ports:
       - "8080:8080"
     depends_on:
