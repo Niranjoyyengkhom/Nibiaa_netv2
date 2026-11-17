@@ -10,7 +10,15 @@ export default defineConfig({
   server: {
     port: parseInt(process.env.PORT || "8080", 10),
     host: true,
-    allowedHosts: true,
+    allowedHosts: [
+      "nibiaanet.nibiaa.com",
+      "nibiaaplaxx.nibiaa.com",
+      ".nibiaa.com",
+      "34.122.43.248",
+      "localhost",
+      "127.0.0.1",
+      "frontend"
+    ],
     fs: {
       strict: false,
     },

@@ -38,6 +38,8 @@ nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com, 34.122.43.248, localhost {
 
     # Frontend Dashboard Web Console
     handle {
-        reverse_proxy frontend:8080
+        reverse_proxy frontend:8080 {
+            header_up Host {upstream_hostport}
+        }
     }
 }

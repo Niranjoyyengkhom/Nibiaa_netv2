@@ -218,6 +218,8 @@ services:
       VITE_IAM_TARGET: http://iam:3002
       VITE_BILLING_TARGET: http://billing:3003
       VITE_INGESTION_TARGET: http://protocol_ingestion:1002
+    volumes:
+      - ./frontend/vite.config.js:/app/vite.config.js:ro
     ports:
       - "8080:8080"
     depends_on:
