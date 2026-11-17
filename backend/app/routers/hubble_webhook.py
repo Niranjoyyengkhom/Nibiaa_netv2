@@ -70,7 +70,7 @@ def authenticate_hubble(
       4. HTTP Basic Authentication (Authorization: Basic base64(user:pass))
       5. Headers (X-Hubble-Username/Password or X-Username/Password)
       6. Query Parameters (?username=...&password=...)
-    Verifies against configured HUBBLE_WEBHOOK_SECRET, HUBBLE_WEBHOOK_USERNAME/PASSWORD, or database users/profiles.
+      7. Open access when no secret or basic auth is configured
     """
     configured_secret = os.getenv("HUBBLE_WEBHOOK_SECRET", DEFAULT_HUBBLE_SECRET).strip()
 
@@ -140,39 +140,62 @@ def authenticate_hubble(
         user = query_username
         password = query_password
 
-    if not user or not password:
+    if user and password:
+        # Match configured Hubble service credentials
+        configured_user = os.getenv("HUBBLE_WEBHOOK_USERNAME", DEFAULT_HUBBLE_USER)
+        configured_pass = os.getenv("HUBBLE_WEBHOOK_PASSWORD", DEFAULT_HUBBLE_PASS)
+
+        if user == configured_user and password == configured_pass:
+            return user
+
+        # Match database user (e.g. admin or tenant owner)
+        db_user = (
+            db.query(User)
+            .filter((User.name == user) | (User.email == user))
+            .first()
+        )
+        if db_user and db_user.password_hash:
+            try:
+                if verify_password(password, db_user.password_hash):
+                    return db_user.email or db_user.name
+            except Exception:
+                pass
+
+        logger.warning("Hubble webhook authentication failed for username: %s", user)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required. Please provide Hubble Webhook Secret Token (HTTP-X-HUBBLE-TOKEN header) or HTTP Basic Auth.",
+            detail="Invalid Hubble webhook username or password.",
             headers={"WWW-Authenticate": 'Basic realm="Hubble Webhook"'},
         )
 
-    # 2a. Match configured Hubble service credentials
-    configured_user = os.getenv("HUBBLE_WEBHOOK_USERNAME", DEFAULT_HUBBLE_USER)
-    configured_pass = os.getenv("HUBBLE_WEBHOOK_PASSWORD", DEFAULT_HUBBLE_PASS)
-
-    if user == configured_user and password == configured_pass:
-        return user
-
-    # 2b. Match database user (e.g. admin or tenant owner)
-    db_user = (
-        db.query(User)
-        .filter((User.name == user) | (User.email == user))
+    # 3. Check if authentication is strictly enforced
+    # If a secret is defined in environment or if IngestionProfile specifically configured a required secret
+    db_profile = (
+        db.query(IngestionProfile)
+        .filter(
+            IngestionProfile.is_enabled == True,
+            (IngestionProfile.network_profile_code == "hubble")
+            | (IngestionProfile.code.ilike("%hubble%")),
+        )
         .first()
     )
-    if db_user and db_user.password_hash:
-        try:
-            if verify_password(password, db_user.password_hash):
-                return db_user.email or db_user.name
-        except Exception:
-            pass
+    profile_requires_secret = db_profile and db_profile.auth_type == "hubble_secret" and (db_profile.auth_token or db_profile.auth_password)
+    profile_requires_basic = db_profile and db_profile.auth_type == "basic_auth"
 
-    logger.warning("Hubble webhook authentication failed for username: %s", user)
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid Hubble webhook username, password, or secret token.",
-        headers={"WWW-Authenticate": 'Basic realm="Hubble Webhook"'},
-    )
+    if configured_secret or profile_requires_secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please provide Hubble Webhook Secret Token (HTTP-X-HUBBLE-TOKEN header).",
+        )
+    elif profile_requires_basic:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please provide HTTP Basic Auth (Username and Password).",
+            headers={"WWW-Authenticate": 'Basic realm="Hubble Webhook"'},
+        )
+
+    # When no secret or password is required, allow open Hubble webhooks
+    return "hubble-open"
 
 
 def parse_raw_payload(payload_val: Any) -> bytes:
@@ -245,6 +268,7 @@ def hubble_webhook_health():
             "Bearer Secret Token (Authorization: Bearer <secret>)",
             "URL Secret Parameter (?secret=<secret>)",
             "HTTP Basic Authentication (Username & Password)",
+            "Open Ingestion (when configured in Ingestion Profile)",
         ],
         "secret_configured": bool(os.getenv("HUBBLE_WEBHOOK_SECRET")),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -381,14 +405,22 @@ async def ingest_hubble_webhook(
             telemetry_data = {k: v for k, v in telemetry_data.items() if v is not None}
             raw_bytes = json.dumps(telemetry_data).encode("utf-8")
 
-        # 5. AUTO-REGISTER DEVICE IF NOT REGISTERED
-        existing_device = (
-            db.query(Device)
-            .filter((Device.device_id == device_id) | (Device.name == device_name))
-            .first()
+        # 5. Extract timestamps
+        rx_time = parse_timestamp(
+            dev_obj.get("timestamp")
+            or loc_obj.get("timestamp")
+            or pkt.get("timestamp")
+            or pkt.get("rx_time")
         )
-        if not existing_device:
-            try:
+
+        try:
+            # 6. AUTO-REGISTER DEVICE IF NOT REGISTERED
+            existing_device = (
+                db.query(Device)
+                .filter((Device.device_id == device_id) | (Device.name == device_name))
+                .first()
+            )
+            if not existing_device:
                 # Find or create active tenant
                 tenant = db.query(Tenant).filter(Tenant.is_active == True).first()
                 if not tenant:
@@ -446,78 +478,40 @@ async def ingest_hubble_webhook(
                 db.add(new_device)
                 db.commit()
                 db.refresh(new_device)
-                existing_device = new_device
                 logger.info("Auto-registered new Hubble device: %s (%s)", device_id, device_name)
-            except Exception as reg_err:
-                db.rollback()
-                logger.warning("Could not auto-register device %s: %s", device_id, reg_err)
 
-        # 6. Extract timestamps
-        rx_time = parse_timestamp(
-            dev_obj.get("timestamp")
-            or loc_obj.get("timestamp")
-            or pkt.get("timestamp")
-            or pkt.get("rx_time")
-        )
-
-        metadata: Dict[str, Any] = {
-            "source": "hubble_network_webhook",
-            "authenticated_as": authenticated_user,
-            "remote_ip": remote_ip,
-            "device_name": device_name,
-            "network_type": network_type,
-        }
-        if rssi is not None:
-            metadata["rssi"] = rssi
-        if snr is not None:
-            metadata["snr"] = snr
-        if seq is not None:
-            metadata["sequence_number"] = seq
-        if counter is not None:
-            metadata["counter"] = counter
-        if lat is not None and lon is not None:
-            metadata["coordinates"] = {
-                "latitude": float(lat),
-                "longitude": float(lon),
-                "altitude": float(altitude) if altitude is not None else None,
-            }
-        if tags:
-            metadata["tags"] = tags
-
-        try:
-            # Stage message in NibiaaNet DecodedMessage repository
-            staged_msg = ingestion_service.create_staged_message(
+            # Ingest uplink through IngestionService
+            msg = ingestion_service.process_uplink(
                 db=db,
+                transport="webhook",
+                raw_payload=raw_bytes,
                 source_address=f"hubble://{remote_ip}",
-                remote_port=443,
-                protocol="webhook",
-                payload_bytes=raw_bytes,
                 client_id=f"hubble-{device_id}",
+                device_identifier=str(device_id),
+                received_at=rx_time,
                 provider="hubble",
                 message_ref=str(pkt.get("messageId") or dev_obj.get("counter") or f"hubble-{idx}-{int(rx_time.timestamp())}"),
-                device_id_hint=str(device_id),
+                remote_port=443,
+                protocol_id="hubble-webhook",
+                payload_format="json",
             )
 
-            # Process / decode the uplink asynchronously or inline
-            processed_record = ingestion_service.process_staged_message(
-                db=db,
-                message_id=staged_msg.id,
-                payload_bytes=raw_bytes,
-                device_id_hint=str(device_id),
-                client_id=f"hubble-{device_id}",
-                protocol="webhook",
-                metadata=metadata,
-            )
+            # Dispatch message for live UI updates
+            try:
+                ingestion_service.dispatch(db, msg)
+            except Exception as disp_err:
+                logger.debug("Dispatch non-blocking error: %s", disp_err)
 
             results.append({
                 "index": idx,
                 "device_id": str(device_id),
                 "device_name": device_name,
-                "message_id": staged_msg.id,
-                "status": processed_record.status.value if processed_record else "ROUTED",
-                "telemetry_id": processed_record.telemetry_id if processed_record else None,
+                "message_id": msg.id,
+                "status": msg.status.value if msg and msg.status else "ROUTED",
+                "telemetry_id": getattr(msg, "telemetry_id", None),
             })
         except Exception as err:
+            db.rollback()
             logger.error("Error processing Hubble uplink for device %s: %s", device_id, err, exc_info=True)
             results.append({
                 "index": idx,
