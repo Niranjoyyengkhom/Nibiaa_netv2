@@ -110,6 +110,8 @@ services:
       UDP_PORT: 5005
       UDP_INGEST_ENABLED: "true"
       ALLOWED_ORIGINS: "*"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-nibiaanet_jwt_secret_production_key_369}
+      DB_ENCRYPTION_KEY: ${DB_ENCRYPTION_KEY:-nibiaanet_jwt_secret_production_key_369}
     volumes:
       - ./decoder/app:/app/app:ro
     ports:

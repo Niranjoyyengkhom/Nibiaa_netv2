@@ -80,6 +80,16 @@ def decrypt_string(ciphertext: Union[str, None]) -> Union[str, None]:
         decrypted = _CIPHER.decrypt(token)
         return decrypted.decode("utf-8")
     except InvalidToken:
+        try:
+            dev_cipher = Fernet(_derive_fernet_key("dev_nibiaanet_jwt_secret_key_change_in_prod_369"))
+            return dev_cipher.decrypt(token).decode("utf-8")
+        except Exception:
+            pass
+        try:
+            prod_cipher = Fernet(_derive_fernet_key("nibiaanet_jwt_secret_production_key_369"))
+            return prod_cipher.decrypt(token).decode("utf-8")
+        except Exception:
+            pass
         logger.error("Failed to decrypt database field with active application key.")
         raise ValueError("Invalid database encryption key or corrupted ciphertext.")
 
