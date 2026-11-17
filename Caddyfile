@@ -1,10 +1,9 @@
 {
     email {$ACME_EMAIL:admin@nibiaa.com}
-    # Auto-HTTPS with Let's Encrypt / ZeroSSL
 }
 
-# 1. Main HTTPS Site (Port 443 & automatic Port 80 HTTP->HTTPS redirect)
-{$DOMAIN:34.59.120.169.nip.io} {
+# NibiaaNet Official Domain & Fallback (Supports HTTP & HTTPS for Cloudflare Flexible/Full)
+nibiaanet.nibiaa.com, http://nibiaanet.nibiaa.com, {$DOMAIN:34.59.120.169.nip.io} {
     # Webhook Ingestion endpoints for Hubble Network and 3rd party gateways
     handle /webhook* {
         reverse_proxy protocol_ingestion:1002
@@ -39,9 +38,4 @@
     handle {
         reverse_proxy frontend:8080
     }
-}
-
-# 2. Dedicated HTTPS on Port 1002 for direct webhook integrations
-{$DOMAIN:34.59.120.169.nip.io}:1002 {
-    reverse_proxy protocol_ingestion:1002
 }
