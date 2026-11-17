@@ -328,88 +328,87 @@ function formatRelativeTime(dateStr) {
   }
 }
 
+function parsePayload(hex) {
+  if (!hex || typeof hex !== "string") {
+    return { isEmpty: true };
+  }
+  const cleanHex = hex.trim().replace(/^0x/i, "").replace(/\s+/g, "");
+  if (!cleanHex || cleanHex.length < 2) {
+    return { isEmpty: true };
+  }
+
+  const bytes = [];
+  for (let i = 0; i < cleanHex.length; i += 2) {
+    bytes.push(parseInt(cleanHex.substring(i, i + 2), 16));
+  }
+
+  // 1. UTF-8 Text / JSON
+  let text = "";
+  let isUtf8 = false;
+  let isJson = false;
+  let formattedJson = null;
+
+  try {
+    const uint8 = new Uint8Array(bytes);
+    text = new TextDecoder("utf-8", { fatal: true }).decode(uint8);
+    isUtf8 = true;
+  } catch {
+    // Fallback: check printable ASCII
+    let printable = 0;
+    for (const b of bytes) {
+      if ((b >= 32 && b <= 126) || b === 10 || b === 13 || b === 9) printable++;
+    }
+    if (bytes.length > 0 && printable / bytes.length >= 0.8) {
+      text = bytes.map((b) => ((b >= 32 && b <= 126) || b === 10 || b === 13 || b === 9 ? String.fromCharCode(b) : ".")).join("");
+      isUtf8 = true;
+    }
+  }
+
+  if (isUtf8 && text) {
+    const trimmed = text.trim();
+    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      try {
+        const obj = JSON.parse(trimmed);
+        formattedJson = JSON.stringify(obj, null, 2);
+        isJson = true;
+      } catch {}
+    }
+  }
+
+  // 2. Base64
+  let b64 = "";
+  try {
+    let bin = "";
+    for (const b of bytes) bin += String.fromCharCode(b);
+    b64 = btoa(bin);
+  } catch {}
+
+  // 3. Formatted Hex (spaced)
+  const spacedHex = cleanHex.match(/.{1,2}/g)?.join(" ") || cleanHex;
+
+  // 4. Byte array string
+  const byteArrStr = "[" + bytes.join(", ") + "]";
+
+  const defaultMode = isJson ? "json" : isUtf8 ? "text" : "hex";
+
+  return {
+    isEmpty: false,
+    bytesCount: bytes.length,
+    isJson,
+    isUtf8,
+    defaultMode,
+    json: formattedJson,
+    text: text,
+    hex: spacedHex,
+    rawHex: cleanHex,
+    base64: b64,
+    bytesArray: byteArrStr,
+  };
+}
+
 function InboundPayloadView({ hex }) {
   const [copied, setCopied] = useState(false);
-
-  // Parse hex into all formats
-  const parsed = useMemo(() => {
-    if (!hex || typeof hex !== "string") {
-      return { isEmpty: true };
-    }
-    const cleanHex = hex.trim().replace(/^0x/i, "").replace(/\s+/g, "");
-    if (!cleanHex || cleanHex.length < 2) {
-      return { isEmpty: true };
-    }
-
-    const bytes = [];
-    for (let i = 0; i < cleanHex.length; i += 2) {
-      bytes.push(parseInt(cleanHex.substring(i, i + 2), 16));
-    }
-
-    // 1. UTF-8 Text / JSON
-    let text = "";
-    let isUtf8 = false;
-    let isJson = false;
-    let formattedJson = null;
-
-    try {
-      const uint8 = new Uint8Array(bytes);
-      text = new TextDecoder("utf-8", { fatal: true }).decode(uint8);
-      isUtf8 = true;
-    } catch {
-      // Fallback: check printable ASCII
-      let printable = 0;
-      for (const b of bytes) {
-        if ((b >= 32 && b <= 126) || b === 10 || b === 13 || b === 9) printable++;
-      }
-      if (bytes.length > 0 && printable / bytes.length >= 0.8) {
-        text = bytes.map((b) => ((b >= 32 && b <= 126) || b === 10 || b === 13 || b === 9 ? String.fromCharCode(b) : ".")).join("");
-        isUtf8 = true;
-      }
-    }
-
-    if (isUtf8 && text) {
-      const trimmed = text.trim();
-      if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-        try {
-          const obj = JSON.parse(trimmed);
-          formattedJson = JSON.stringify(obj, null, 2);
-          isJson = true;
-        } catch {}
-      }
-    }
-
-    // 2. Base64
-    let b64 = "";
-    try {
-      let bin = "";
-      for (const b of bytes) bin += String.fromCharCode(b);
-      b64 = btoa(bin);
-    } catch {}
-
-    // 3. Formatted Hex (spaced)
-    const spacedHex = cleanHex.match(/.{1,2}/g)?.join(" ") || cleanHex;
-
-    // 4. Byte array string
-    const byteArrStr = "[" + bytes.join(", ") + "]";
-
-    const defaultMode = isJson ? "json" : isUtf8 ? "text" : "hex";
-
-    return {
-      isEmpty: false,
-      bytesCount: bytes.length,
-      isJson,
-      isUtf8,
-      defaultMode,
-      json: formattedJson,
-      text: text,
-      hex: spacedHex,
-      rawHex: cleanHex,
-      base64: b64,
-      bytesArray: byteArrStr,
-    };
-  }, [hex]);
-
+  const parsed = parsePayload(hex);
   const [mode, setMode] = useState(parsed.defaultMode || "json");
 
   // Keep mode in sync if payload changes
