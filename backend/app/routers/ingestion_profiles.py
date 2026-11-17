@@ -1,3 +1,4 @@
+import os
 import json
 import logging
 import urllib.request
@@ -165,7 +166,7 @@ class IngestionProfileCreateSchema(BaseModel):
 
 
 @router.get("")
-def list_ingestion_profiles(db: Session = Depends(get_db)):
+def list_ingestion_profiles(request: Request, db: Session = Depends(get_db)):
     """List all Ingestion Profiles and their configuration (default vs admin provided)."""
     ensure_default_ingestion_profiles(db)
     profiles = db.query(IngestionProfile).order_by(IngestionProfile.id.asc()).all()
@@ -173,9 +174,31 @@ def list_ingestion_profiles(db: Session = Depends(get_db)):
     # Also fetch network profiles to associate them
     net_profiles = db.query(ConnectivityProfile).all()
     net_map = {np.code: np.name for np in net_profiles}
-    
+
+    default_domain = os.getenv("DOMAIN", "nibiaanet.nibiaa.com").strip()
+    req_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if req_host:
+        req_host = req_host.split(":")[0].strip()
+    live_host = req_host if (req_host and req_host not in ["backend", "frontend", "127.0.0.1", "localhost"]) else default_domain
+
     result = []
     for p in profiles:
+        effective_host = p.host if (p.host and p.host not in ["localhost", "127.0.0.1", "0.0.0.0"]) else live_host
+        is_webhook = (p.protocol or "").lower() == "webhook"
+        effective_port = 443 if is_webhook else p.effective_port
+        clean_path = p.custom_path or ("/webhook" if is_webhook else "")
+
+        if is_webhook:
+            live_uri = f"https://{effective_host}{clean_path if clean_path.startswith('/') else '/' + clean_path}"
+        elif p.protocol == "mqtt":
+            live_uri = f"mqtt://{effective_host}:{effective_port}/{clean_path or 'devices/+/up'}"
+        elif p.protocol == "tcp":
+            live_uri = f"tcp://{effective_host}:{effective_port}"
+        elif p.protocol == "udp":
+            live_uri = f"udp://{effective_host}:{effective_port}"
+        else:
+            live_uri = f"{effective_host}:{effective_port}"
+
         result.append({
             "id": p.id,
             "code": p.code,
@@ -186,8 +209,10 @@ def list_ingestion_profiles(db: Session = Depends(get_db)):
             "use_default": p.use_default,
             "default_port": p.default_port,
             "custom_port": p.custom_port,
-            "effective_port": p.effective_port,
-            "host": p.host,
+            "effective_port": effective_port,
+            "host": effective_host,
+            "live_host": effective_host,
+            "live_uri": live_uri,
             "auth_type": p.auth_type,
             "auth_username": p.auth_username,
             "auth_password": "***" if p.auth_password else None,
