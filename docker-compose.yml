@@ -233,6 +233,7 @@ services:
     container_name: nibiaanet_caddy
     restart: unless-stopped
     dns:
+      - 127.0.0.11
       - 8.8.8.8
       - 1.1.1.1
     ports:
