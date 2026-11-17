@@ -239,9 +239,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "1002:1002"
     environment:
-      DOMAIN: ${DOMAIN:-34.59.120.169.nip.io}
+      DOMAIN: ${DOMAIN:-nibiaanet.nibiaa.com}
       ACME_EMAIL: ${ACME_EMAIL:-admin@nibiaa.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
