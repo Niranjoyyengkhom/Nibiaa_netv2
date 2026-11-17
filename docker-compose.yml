@@ -73,6 +73,11 @@ services:
       BILLING_SERVICE_URL: http://billing:3003
       PROTOCOL_INGESTION_SERVICE_URL: http://protocol_ingestion:1002
       ALLOWED_ORIGINS: "*"
+      HUBBLE_WEBHOOK_USERNAME: ${HUBBLE_WEBHOOK_USERNAME:-hubble}
+      HUBBLE_WEBHOOK_PASSWORD: ${HUBBLE_WEBHOOK_PASSWORD:-hubble123}
+      HUBBLE_WEBHOOK_SECRET: ${HUBBLE_WEBHOOK_SECRET:-}
+    volumes:
+      - ./backend/app:/app/app:ro
     ports:
       - "3000:3000"
     depends_on:
@@ -185,6 +190,9 @@ services:
     container_name: nibiaanet_protocol_ingestion
     environment:
       BACKEND_INGEST_URL: http://backend:3000/ingest/internal-uplink
+      HUBBLE_WEBHOOK_SECRET: ${HUBBLE_WEBHOOK_SECRET:-}
+    volumes:
+      - ./protocol_ingestion/app:/app/app:ro
     ports:
       - "5001:5001/udp"
       - "1883:1883"

@@ -1,3 +1,5 @@
+import os
+import hmac
 import asyncio
 import json
 import logging
@@ -61,6 +63,24 @@ async def receive_webhook_uplink(
     background_tasks: BackgroundTasks,
     endpoint_path: Optional[str] = None,
 ):
+    # Optional Hubble / Webhook Secret verification
+    configured_secret = os.getenv("HUBBLE_WEBHOOK_SECRET", "").strip()
+    if configured_secret:
+        token = (
+            request.headers.get("HTTP-X-HUBBLE-TOKEN")
+            or request.headers.get("X-Hubble-Token")
+            or request.headers.get("X-Hubble-Secret")
+            or request.headers.get("X-Webhook-Secret")
+            or request.query_params.get("secret")
+            or request.query_params.get("token")
+        )
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+
+        if token and not hmac.compare_digest(token.strip(), configured_secret):
+            raise HTTPException(status_code=401, detail="Invalid Webhook Secret Token.")
+
     try:
         body = await request.json()
     except Exception as e:
