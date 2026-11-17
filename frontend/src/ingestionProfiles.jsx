@@ -66,7 +66,7 @@ export default function IngestionProfiles({ api, currentUser }) {
     network_profile_code: "all",
     use_default: true,
     custom_port: "",
-    host: "localhost",
+    host: "nibiaanet.nibiaa.com",
     auth_type: "none",
     auth_username: "",
     auth_password: "",
@@ -85,7 +85,7 @@ export default function IngestionProfiles({ api, currentUser }) {
     network_profile_code: "all",
     use_default: true,
     custom_port: "",
-    host: "localhost",
+    host: "nibiaanet.nibiaa.com",
     auth_type: "none",
     auth_username: "",
     auth_password: "",
@@ -204,7 +204,7 @@ export default function IngestionProfiles({ api, currentUser }) {
       network_profile_code: p.network_profile_code || "all",
       use_default: p.use_default ?? true,
       custom_port: p.custom_port ? String(p.custom_port) : "",
-      host: p.host || "localhost",
+      host: (p.host && p.host !== "localhost" && p.host !== "127.0.0.1" && p.host !== "0.0.0.0") ? p.host : liveHost,
       auth_type: p.auth_type || "none",
       auth_username: p.auth_username || "",
       auth_password: p.has_password ? "***" : "",
@@ -220,13 +220,14 @@ export default function IngestionProfiles({ api, currentUser }) {
     e.preventDefault();
     if (!editingProfile) return;
     try {
+      const targetHost = (editForm.host && editForm.host !== "localhost" && editForm.host !== "127.0.0.1") ? editForm.host : liveHost;
       const payload = {
         name: editForm.name,
         protocol: editForm.protocol,
         network_profile_code: editForm.network_profile_code,
         use_default: Boolean(editForm.use_default),
         custom_port: editForm.custom_port ? parseInt(editForm.custom_port, 10) : null,
-        host: editForm.host || "localhost",
+        host: targetHost,
         auth_type: editForm.auth_type,
         auth_username: editForm.auth_username || null,
         auth_password: editForm.auth_password || null,

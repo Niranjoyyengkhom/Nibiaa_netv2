@@ -6,23 +6,27 @@
 }
 
 # Redirect direct IP access to primary domain
-http://34.122.43.248, 34.122.43.248 {
+http://34.122.43.248 {
     redir https://nibiaanet.nibiaa.com{uri} permanent
 }
 
 # Official Public SSL (Let's Encrypt / ZeroSSL)
 nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com {
+    log {
+        output stdout
+    }
+
     # Dedicated Hubble Network Webhook endpoints -> backend
     handle /webhooks* {
         reverse_proxy backend:3000
     }
 
-    # Protocol Ingestion Microservice generic webhooks
+    # Protocol Ingestion Microservice & generic webhooks
     handle /webhook* {
-        reverse_proxy protocol_ingestion:1002
+        reverse_proxy backend:3000
     }
     handle /endpoints* {
-        reverse_proxy protocol_ingestion:1002
+        reverse_proxy backend:3000
     }
 
     # Core Backend REST API

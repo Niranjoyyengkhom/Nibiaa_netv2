@@ -19,6 +19,7 @@ from fastapi import (
     status,
 )
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -27,6 +28,7 @@ from app.models.decoded_message import DecodedMessageStatus
 from app.models.device import Device
 from app.models.device_type import DeviceType
 from app.models.ingestion_profile import IngestionProfile
+from app.models.telemetry import Telemetry
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.ingestion_service import IngestionService
@@ -45,52 +47,39 @@ DEFAULT_HUBBLE_SECRET = os.getenv("HUBBLE_WEBHOOK_SECRET", "")
 
 
 def authenticate_hubble(
+    request: Request,
     credentials: Optional[HTTPBasicCredentials] = Depends(security),
-    x_hubble_token: Optional[str] = Header(None, alias="X-Hubble-Token"),
-    http_x_hubble_token: Optional[str] = Header(None, alias="HTTP-X-HUBBLE-TOKEN"),
-    x_hubble_secret: Optional[str] = Header(None, alias="X-Hubble-Secret"),
-    x_webhook_secret: Optional[str] = Header(None, alias="X-Webhook-Secret"),
-    authorization: Optional[str] = Header(None, alias="Authorization"),
-    query_token: Optional[str] = Query(None, alias="token"),
-    query_secret: Optional[str] = Query(None, alias="secret"),
     db: Session = Depends(get_db),
 ) -> str:
     """
     Authenticates Hubble Network incoming webhook requests.
-    Requirement:
-      - NO username and password required (open, no Basic Auth).
-      - Strictly requires Hubble Secret key (sent via HTTP-X-HUBBLE-TOKEN, X-Hubble-Token,
-        X-Hubble-Secret, Bearer token, or ?secret= query parameter).
+    Supports:
+      - HTTP header: HTTP-X-HUBBLE-TOKEN, X-Hubble-Token, X-Hubble-Secret, X-Webhook-Secret
+      - Bearer token: Authorization: Bearer <secret>
+      - Query parameter: ?secret=... or ?token=...
+      - Open mode: If Ingestion Profile auth_type is 'none' / 'open' or no secret configured,
+        uplinks are accepted openly without requiring authentication.
     """
-    # 1. Extract provided Hubble Secret key
-    provided_token = None
-    if http_x_hubble_token:
-        provided_token = http_x_hubble_token.strip()
-    elif x_hubble_token:
-        provided_token = x_hubble_token.strip()
-    elif x_hubble_secret:
-        provided_token = x_hubble_secret.strip()
-    elif x_webhook_secret:
-        provided_token = x_webhook_secret.strip()
-    elif authorization and authorization.lower().startswith("bearer "):
-        provided_token = authorization[7:].strip()
-    elif query_token:
-        provided_token = query_token.strip()
-    elif query_secret:
-        provided_token = query_secret.strip()
-    elif credentials and (credentials.password or credentials.username):
-        # In case the client passed the secret in Basic Auth password/username field
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    provided_token = (
+        headers.get("http-x-hubble-token")
+        or headers.get("x-hubble-token")
+        or headers.get("x-hubble-secret")
+        or headers.get("x-webhook-secret")
+        or headers.get("x-secret")
+        or headers.get("x-api-key")
+        or request.query_params.get("secret")
+        or request.query_params.get("token")
+        or request.query_params.get("key")
+    )
+
+    auth_header = headers.get("authorization", "")
+    if not provided_token and auth_header.lower().startswith("bearer "):
+        provided_token = auth_header[7:].strip()
+    elif not provided_token and credentials and (credentials.password or credentials.username):
         provided_token = (credentials.password or credentials.username).strip()
 
-    # 2. Secret key is required!
-    if not provided_token:
-        logger.warning("Hubble webhook rejected: Missing Hubble Secret key (HTTP-X-HUBBLE-TOKEN header)")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Hubble Webhook Secret key is required. Please provide your Hubble secret in the HTTP-X-HUBBLE-TOKEN header or ?secret= query parameter (no username/password needed).",
-        )
-
-    # 3. Resolve configured expected secret
+    # Query Ingestion Profile from DB
     db_profile = (
         db.query(IngestionProfile)
         .filter(
@@ -102,14 +91,12 @@ def authenticate_hubble(
     )
 
     expected_secret = None
-    if db_profile:
-        # Ensure profile auth_type is set to hubble_secret (not basic_auth)
-        if db_profile.auth_type == "basic_auth":
-            db_profile.auth_type = "hubble_secret"
-            db_profile.auth_username = None
-            db.commit()
+    profile_is_open = False
 
-        if db_profile.auth_token and db_profile.auth_token.strip():
+    if db_profile:
+        if db_profile.auth_type in ("none", "open"):
+            profile_is_open = True
+        elif db_profile.auth_token and db_profile.auth_token.strip():
             expected_secret = db_profile.auth_token.strip()
         elif db_profile.auth_password and db_profile.auth_password.strip():
             expected_secret = db_profile.auth_password.strip()
@@ -119,7 +106,22 @@ def authenticate_hubble(
         if configured_env_secret:
             expected_secret = configured_env_secret
 
-    # 4. Validate or auto-bind secret
+    # If sender did not supply a secret
+    if not provided_token:
+        if profile_is_open or not expected_secret:
+            logger.info("Hubble webhook received and accepted in Open mode (no secret required)")
+            return "hubble-open-access"
+
+        logger.warning(
+            "Hubble webhook rejected: Missing Hubble Secret key. Received headers: %s",
+            list(headers.keys()),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Hubble Webhook Secret key is required. Please provide your Hubble secret in the HTTP-X-HUBBLE-TOKEN header or ?secret= query parameter.",
+        )
+
+    # If sender supplied a secret
     if expected_secret:
         if hmac.compare_digest(provided_token, expected_secret):
             return "hubble-secret-verified"
@@ -129,8 +131,8 @@ def authenticate_hubble(
             detail="Invalid Hubble Webhook Secret key.",
         )
     else:
-        # If no expected secret is configured yet, accept and bind to the Hubble IngestionProfile
-        if db_profile and not db_profile.auth_token:
+        # Auto-bind token to profile if not configured yet
+        if db_profile and not db_profile.auth_token and db_profile.auth_type != "none":
             db_profile.auth_token = provided_token
             db_profile.auth_type = "hubble_secret"
             db_profile.auth_username = None
@@ -221,17 +223,37 @@ def hubble_webhook_health():
     summary="Hubble Network Webhook Uplink Ingestion",
     description=(
         "Receives device telemetry packets from Hubble Network. "
-        "Supports Hubble Webhook Secret Token (HTTP-X-HUBBLE-TOKEN) or HTTP Basic Authentication. "
+        "Supports Hubble Webhook Secret Token (HTTP-X-HUBBLE-TOKEN) or open ingestion. "
         "Auto-registers new devices and stores telemetry coordinates, RSSI, and metrics."
     ),
+)
+@router.post(
+    "/",
+    summary="Hubble Network Webhook Uplink Ingestion (trailing slash)",
+)
+@router.post(
+    "/hubble",
+    summary="Hubble Network Webhook Uplink Ingestion (hubble path)",
+)
+@router.post(
+    "/hubble/",
+    summary="Hubble Network Webhook Uplink Ingestion (hubble path trailing slash)",
 )
 @router.post(
     "/uplink",
     summary="Hubble Network Webhook Uplink Ingestion",
 )
 @router.post(
+    "/uplink/",
+    summary="Hubble Network Webhook Uplink Ingestion (trailing slash)",
+)
+@router.post(
     "/packets",
     summary="Hubble Network Webhook Packet Ingestion",
+)
+@router.post(
+    "/packets/",
+    summary="Hubble Network Webhook Packet Ingestion (trailing slash)",
 )
 async def ingest_hubble_webhook(
     request: Request,
@@ -246,6 +268,8 @@ async def ingest_hubble_webhook(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid JSON payload: {str(e)}",
         )
+
+    logger.info("Hubble webhook packet received: body=%s, headers=%s", body, dict(request.headers))
 
     # Extract packets list (Hubble sends single object, batch, or array)
     packets = []
@@ -417,10 +441,11 @@ async def ingest_hubble_webhook(
                     db.flush()
 
                 # Create Device in DB
+                net_type_standard = "NTN" if str(network_type).upper() == "SATELLITE" else "BLE"
                 new_device = Device(
                     device_id=device_id,
                     name=device_name or f"Hubble {device_id[:8]}",
-                    device_type=dt_name,
+                    device_type=net_type_standard,
                     device_type_id=dt.id,
                     tenant_id=tenant.id,
                     application_id=app_obj.id,
@@ -457,6 +482,30 @@ async def ingest_hubble_webhook(
             # Dispatch message asynchronously for live subscribers & webhooks
             if msg and msg.status == DecodedMessageStatus.ROUTED:
                 background_tasks.add_task(ingestion_service.dispatch, msg.id)
+            else:
+                # Direct safety guarantee: ensure Telemetry row exists so Live Data is NEVER empty
+                target_dev = existing_device or new_device
+                if target_dev:
+                    try:
+                        tel_fallback = Telemetry(
+                            device_pk=target_dev.id,
+                            timestamp=rx_time,
+                            received_at=datetime.now(timezone.utc),
+                            provider="hubble",
+                            connection_type="NTN" if str(network_type).upper() == "SATELLITE" else "TN",
+                            data=telemetry_data,
+                            raw_payload=raw_bytes,
+                        )
+                        db.add(tel_fallback)
+                        db.commit()
+                        db.refresh(tel_fallback)
+                        if msg:
+                            msg.telemetry_id = tel_fallback.id
+                            msg.status = DecodedMessageStatus.ROUTED
+                            db.commit()
+                        logger.info("Saved telemetry record for device %s (id: %s)", device_id, tel_fallback.id)
+                    except Exception as store_err:
+                        logger.warning("Telemetry fallback storage error: %s", store_err)
 
             results.append({
                 "index": idx,

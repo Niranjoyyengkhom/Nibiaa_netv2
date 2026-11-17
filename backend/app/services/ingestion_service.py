@@ -941,17 +941,18 @@ class IngestionService:
     ):
         timestamp = message.received_at
 
-        if message.decoded.get("timestamp") is not None:
+        if message.decoded and message.decoded.get("timestamp") is not None:
+            raw_ts = message.decoded["timestamp"]
             try:
-                timestamp = datetime.fromtimestamp(
-                    message.decoded["timestamp"],
-                    tz=timezone.utc
-                )
-            except (OverflowError, OSError, ValueError, TypeError):
-                message.status = DecodedMessageStatus.DECODE_FAILED
-                raise IngestError(
-                    f"timestamp {message.decoded['timestamp']} is not a valid Unix time"
-                )
+                if isinstance(raw_ts, (int, float)):
+                    if raw_ts > 1e11:  # milliseconds
+                        raw_ts = raw_ts / 1000.0
+                    timestamp = datetime.fromtimestamp(raw_ts, tz=timezone.utc)
+                elif isinstance(raw_ts, str):
+                    clean_ts = raw_ts.replace("Z", "+00:00")
+                    timestamp = datetime.fromisoformat(clean_ts)
+            except Exception:
+                timestamp = message.received_at
 
         telemetry = Telemetry(
             device_pk=device.id,

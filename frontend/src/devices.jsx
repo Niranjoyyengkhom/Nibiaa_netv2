@@ -317,7 +317,10 @@ function Devices({ api, currentUser, navigate, selectedHeaderApplication = "" })
     : devices;
 
   const filteredDevices = typeFilter
-    ? applicationDevices.filter((device) => device.device_type === typeFilter)
+    ? applicationDevices.filter((device) =>
+        device.device_type === typeFilter ||
+        device.device_type?.toLowerCase()?.includes(typeFilter.toLowerCase())
+      )
     : applicationDevices;
 
   const otherCount = applicationDevices.filter((device) => !typeOf(device.device_type)).length;
@@ -365,7 +368,12 @@ function Devices({ api, currentUser, navigate, selectedHeaderApplication = "" })
               aria-pressed={typeFilter === type.value}
             >
               <span>{type.label}</span>
-              <strong>{applicationDevices.filter((device) => device.device_type === type.value).length}</strong>
+              <strong>
+                {applicationDevices.filter((device) =>
+                  device.device_type === type.value ||
+                  device.device_type?.toLowerCase()?.includes(type.value.toLowerCase())
+                ).length}
+              </strong>
               <small>{type.connection_type === "NTN" ? "Satellite" : "Terrestrial"}</small>
             </button>
           ))}

@@ -10,4 +10,7 @@ paho-mqtt>=2.0.0
 py-mini-racer>=0.6.0
 redis>=5.0.0
 fakeredis>=2.20.0
+cryptography>=42.0.0
+PyJWT>=2.8.0
+
 
