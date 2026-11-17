@@ -1,10 +1,16 @@
 {
     email {$ACME_EMAIL:admin@nibiaa.com}
+    servers {
+        protocols h1 h2
+    }
 }
 
 # NibiaaNet Production Domains and Server IP (Self-Signed CA SSL)
 nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com, 34.122.43.248, localhost {
     tls /etc/caddy/certs/server.crt /etc/caddy/certs/server.key
+
+    # Clear cached HTTP/3 QUIC in Chrome and prevent QUIC protocol errors
+    header Alt-Svc "clear"
 
     # Webhook Ingestion endpoints for Hubble Network and 3rd party gateways
     handle /webhook* {
