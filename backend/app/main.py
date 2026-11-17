@@ -104,7 +104,7 @@ try:
                 conn.execute(text(f"SELECT setval('{seq}', {max(max_val, 1)}, true)"))
     db_status = "connected"
 except Exception as e:
-    logger.warning(f"PostgreSQL connection to {DATABASE_URL} failed on startup: {e}. Ensure PostgreSQL is running.")
+    logger.warning(f"PostgreSQL connection to {DATABASE_URL} failed on startup: {e}. Ensure PostgreSQL is running.", exc_info=True)
     db_status = f"disconnected: {e}"
 
 billing_db_status = "initializing"
@@ -115,7 +115,7 @@ try:
         network_provider_service.seed_default_providers(billing_startup_db)
     billing_db_status = "connected"
 except Exception as e:
-    logger.warning(f"Billing DB connection to {BILLING_DATABASE_URL} failed on startup: {e}.")
+    logger.warning(f"Billing DB connection to {BILLING_DATABASE_URL} failed on startup: {e}.", exc_info=True)
     billing_db_status = f"disconnected: {e}"
 
 # Initialize Cassandra and Redis storage
