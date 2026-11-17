@@ -10,6 +10,7 @@ export default defineConfig({
   server: {
     port: parseInt(process.env.PORT || "8080", 10),
     host: true,
+    allowedHosts: true,
     fs: {
       strict: false,
     },
