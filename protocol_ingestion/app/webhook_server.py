@@ -63,23 +63,36 @@ async def receive_webhook_uplink(
     background_tasks: BackgroundTasks,
     endpoint_path: Optional[str] = None,
 ):
-    # Optional Hubble / Webhook Secret verification
-    configured_secret = os.getenv("HUBBLE_WEBHOOK_SECRET", "").strip()
-    if configured_secret:
-        token = (
-            request.headers.get("HTTP-X-HUBBLE-TOKEN")
-            or request.headers.get("X-Hubble-Token")
-            or request.headers.get("X-Hubble-Secret")
-            or request.headers.get("X-Webhook-Secret")
-            or request.query_params.get("secret")
-            or request.query_params.get("token")
-        )
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.lower().startswith("bearer "):
-            token = auth_header[7:].strip()
+    # Hubble / Webhook Secret verification (No username/password required)
+    token = (
+        request.headers.get("HTTP-X-HUBBLE-TOKEN")
+        or request.headers.get("X-Hubble-Token")
+        or request.headers.get("X-Hubble-Secret")
+        or request.headers.get("X-Webhook-Secret")
+        or request.query_params.get("secret")
+        or request.query_params.get("token")
+    )
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
 
-        if token and not hmac.compare_digest(token.strip(), configured_secret):
-            raise HTTPException(status_code=401, detail="Invalid Webhook Secret Token.")
+    is_hubble = (
+        "hubble" in (endpoint_path or "").lower()
+        or bool(request.headers.get("HTTP-X-HUBBLE-TOKEN"))
+        or bool(request.headers.get("X-Hubble-Token"))
+    )
+
+    configured_secret = os.getenv("HUBBLE_WEBHOOK_SECRET", "").strip()
+    if is_hubble:
+        if not token:
+            raise HTTPException(
+                status_code=401,
+                detail="Hubble Webhook Secret key is required (HTTP-X-HUBBLE-TOKEN header or ?secret= parameter). No username/password required.",
+            )
+        if configured_secret and not hmac.compare_digest(token.strip(), configured_secret):
+            raise HTTPException(status_code=401, detail="Invalid Hubble Webhook Secret Token.")
+    elif configured_secret and token and not hmac.compare_digest(token.strip(), configured_secret):
+        raise HTTPException(status_code=401, detail="Invalid Webhook Secret Token.")
 
     try:
         body = await request.json()

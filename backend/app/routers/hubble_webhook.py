@@ -19,7 +19,6 @@ from fastapi import (
     status,
 )
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -52,30 +51,18 @@ def authenticate_hubble(
     x_hubble_secret: Optional[str] = Header(None, alias="X-Hubble-Secret"),
     x_webhook_secret: Optional[str] = Header(None, alias="X-Webhook-Secret"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
-    x_hubble_username: Optional[str] = Header(None, alias="X-Hubble-Username"),
-    x_hubble_password: Optional[str] = Header(None, alias="X-Hubble-Password"),
-    x_username: Optional[str] = Header(None, alias="X-Username"),
-    x_password: Optional[str] = Header(None, alias="X-Password"),
     query_token: Optional[str] = Query(None, alias="token"),
     query_secret: Optional[str] = Query(None, alias="secret"),
-    query_username: Optional[str] = Query(None, alias="username"),
-    query_password: Optional[str] = Query(None, alias="password"),
     db: Session = Depends(get_db),
 ) -> str:
     """
     Authenticates Hubble Network incoming webhook requests.
-    Supports:
-      1. Hubble Webhook Secret Token Header (HTTP-X-HUBBLE-TOKEN, X-Hubble-Token, X-Hubble-Secret, X-Webhook-Secret)
-      2. Bearer Token Authorization (Authorization: Bearer <secret>)
-      3. Query parameter secret token (?secret=... or ?token=...)
-      4. HTTP Basic Authentication (Authorization: Basic base64(user:pass))
-      5. Headers (X-Hubble-Username/Password or X-Username/Password)
-      6. Query Parameters (?username=...&password=...)
-      7. Open access when no secret or basic auth is configured
+    Requirement:
+      - NO username and password required (open, no Basic Auth).
+      - Strictly requires Hubble Secret key (sent via HTTP-X-HUBBLE-TOKEN, X-Hubble-Token,
+        X-Hubble-Secret, Bearer token, or ?secret= query parameter).
     """
-    configured_secret = os.getenv("HUBBLE_WEBHOOK_SECRET", DEFAULT_HUBBLE_SECRET).strip()
-
-    # 1. Check for incoming Secret Token from Hubble
+    # 1. Extract provided Hubble Secret key
     provided_token = None
     if http_x_hubble_token:
         provided_token = http_x_hubble_token.strip()
@@ -91,86 +78,19 @@ def authenticate_hubble(
         provided_token = query_token.strip()
     elif query_secret:
         provided_token = query_secret.strip()
+    elif credentials and (credentials.password or credentials.username):
+        # In case the client passed the secret in Basic Auth password/username field
+        provided_token = (credentials.password or credentials.username).strip()
 
-    if provided_token:
-        if configured_secret:
-            if hmac.compare_digest(provided_token, configured_secret):
-                return "hubble-webhook-secret"
-            logger.warning("Hubble webhook secret token mismatch against configured HUBBLE_WEBHOOK_SECRET")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid Hubble webhook secret token.",
-            )
-        else:
-            # Check if secret matches any active IngestionProfile in database
-            try:
-                db_profile = (
-                    db.query(IngestionProfile)
-                    .filter(
-                        IngestionProfile.is_enabled == True,
-                        (IngestionProfile.network_profile_code == "hubble")
-                        | (IngestionProfile.code.ilike("%hubble%")),
-                    )
-                    .first()
-                )
-                if db_profile and (db_profile.auth_token or db_profile.auth_password):
-                    expected = (db_profile.auth_token or db_profile.auth_password).strip()
-                    if hmac.compare_digest(provided_token, expected):
-                        return "hubble-profile-secret"
-            except Exception as e:
-                logger.debug("Database profile lookup error: %s", e)
-
-            # If no strict secret configured yet, accept incoming secret from Hubble and log
-            logger.info("Hubble webhook authenticated using incoming secret token (HUBBLE_WEBHOOK_SECRET not restricted)")
-            return "hubble-token"
-
-    # 2. Check for HTTP Basic Auth or Username/Password
-    user = None
-    password = None
-
-    if credentials:
-        user = credentials.username
-        password = credentials.password
-    elif x_hubble_username and x_hubble_password:
-        user = x_hubble_username
-        password = x_hubble_password
-    elif x_username and x_password:
-        user = x_username
-        password = x_password
-    elif query_username and query_password:
-        user = query_username
-        password = query_password
-
-    if user and password:
-        # Match configured Hubble service credentials
-        configured_user = os.getenv("HUBBLE_WEBHOOK_USERNAME", DEFAULT_HUBBLE_USER)
-        configured_pass = os.getenv("HUBBLE_WEBHOOK_PASSWORD", DEFAULT_HUBBLE_PASS)
-
-        if user == configured_user and password == configured_pass:
-            return user
-
-        # Match database user (e.g. admin or tenant owner)
-        db_user = (
-            db.query(User)
-            .filter((User.name == user) | (User.email == user))
-            .first()
-        )
-        if db_user and db_user.password_hash:
-            try:
-                if verify_password(password, db_user.password_hash):
-                    return db_user.email or db_user.name
-            except Exception:
-                pass
-
-        logger.warning("Hubble webhook authentication failed for username: %s", user)
+    # 2. Secret key is required!
+    if not provided_token:
+        logger.warning("Hubble webhook rejected: Missing Hubble Secret key (HTTP-X-HUBBLE-TOKEN header)")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Hubble webhook username or password.",
-            headers={"WWW-Authenticate": 'Basic realm="Hubble Webhook"'},
+            detail="Hubble Webhook Secret key is required. Please provide your Hubble secret in the HTTP-X-HUBBLE-TOKEN header or ?secret= query parameter (no username/password needed).",
         )
 
-    # 3. Check if authentication is strictly enforced
-    # If a secret is defined in environment or if IngestionProfile specifically configured a required secret
+    # 3. Resolve configured expected secret
     db_profile = (
         db.query(IngestionProfile)
         .filter(
@@ -180,23 +100,43 @@ def authenticate_hubble(
         )
         .first()
     )
-    profile_requires_secret = db_profile and db_profile.auth_type == "hubble_secret" and (db_profile.auth_token or db_profile.auth_password)
-    profile_requires_basic = db_profile and db_profile.auth_type == "basic_auth"
 
-    if configured_secret or profile_requires_secret:
+    expected_secret = None
+    if db_profile:
+        # Ensure profile auth_type is set to hubble_secret (not basic_auth)
+        if db_profile.auth_type == "basic_auth":
+            db_profile.auth_type = "hubble_secret"
+            db_profile.auth_username = None
+            db.commit()
+
+        if db_profile.auth_token and db_profile.auth_token.strip():
+            expected_secret = db_profile.auth_token.strip()
+        elif db_profile.auth_password and db_profile.auth_password.strip():
+            expected_secret = db_profile.auth_password.strip()
+
+    if not expected_secret:
+        configured_env_secret = os.getenv("HUBBLE_WEBHOOK_SECRET", "").strip()
+        if configured_env_secret:
+            expected_secret = configured_env_secret
+
+    # 4. Validate or auto-bind secret
+    if expected_secret:
+        if hmac.compare_digest(provided_token, expected_secret):
+            return "hubble-secret-verified"
+        logger.warning("Hubble webhook secret mismatch against configured secret")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required. Please provide Hubble Webhook Secret Token (HTTP-X-HUBBLE-TOKEN header).",
+            detail="Invalid Hubble Webhook Secret key.",
         )
-    elif profile_requires_basic:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required. Please provide HTTP Basic Auth (Username and Password).",
-            headers={"WWW-Authenticate": 'Basic realm="Hubble Webhook"'},
-        )
-
-    # When no secret or password is required, allow open Hubble webhooks
-    return "hubble-open"
+    else:
+        # If no expected secret is configured yet, accept and bind to the Hubble IngestionProfile
+        if db_profile and not db_profile.auth_token:
+            db_profile.auth_token = provided_token
+            db_profile.auth_type = "hubble_secret"
+            db_profile.auth_username = None
+            db.commit()
+            logger.info("Automatically bound incoming Hubble secret key to Ingestion Profile.")
+        return "hubble-secret-auto-bound"
 
 
 def parse_raw_payload(payload_val: Any) -> bytes:

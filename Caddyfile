@@ -18,13 +18,7 @@ nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com {
     }
 
     # Protocol Ingestion Microservice generic webhooks
-    handle /webhook {
-        reverse_proxy protocol_ingestion:1002
-    }
-    handle /webhook/* {
-        reverse_proxy protocol_ingestion:1002
-    }
-    handle /ingest* {
+    handle /webhook* {
         reverse_proxy protocol_ingestion:1002
     }
     handle /endpoints* {

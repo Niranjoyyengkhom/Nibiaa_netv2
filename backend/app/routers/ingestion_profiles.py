@@ -107,23 +107,29 @@ DEFAULT_PROFILES = [
         "default_port": 1002,
         "custom_port": None,
         "host": "localhost",
-        "auth_type": "basic_auth",
-        "auth_username": "hubble_user",
-        "auth_password": "hubble_password",
+        "auth_type": "hubble_secret",
+        "auth_username": None,
+        "auth_password": None,
+        "auth_token": "",
         "custom_path": "/webhooks/hubble",
         "is_enabled": True,
-        "description": "Dedicated ingestion profile for Hubble Network satellite uplinks with Basic Auth integration.",
+        "description": "Dedicated ingestion profile for Hubble Network satellite uplinks with Secret Key (HTTP-X-HUBBLE-TOKEN) authentication.",
     },
 ]
 
 
 def ensure_default_ingestion_profiles(db: Session):
-    """Seed initial ingestion profiles if table is empty."""
+    """Seed initial ingestion profiles if table is empty and ensure Hubble uses Secret Key."""
     for item in DEFAULT_PROFILES:
         existing = db.query(IngestionProfile).filter(IngestionProfile.code == item["code"]).first()
         if not existing:
             profile = IngestionProfile(**item)
             db.add(profile)
+        elif item["code"] == "hubble_network" and existing.auth_type == "basic_auth":
+            # Migrate existing Hubble profile to Secret Key mode (no basic auth required)
+            existing.auth_type = "hubble_secret"
+            existing.auth_username = None
+            db.add(existing)
     try:
         db.commit()
     except Exception as e:
