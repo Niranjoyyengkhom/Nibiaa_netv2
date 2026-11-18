@@ -127,7 +127,26 @@ async def receive_webhook_uplink(
         )
         provider = pkt.get("provider") or (endpoint_path.split("/")[0] if endpoint_path else ("hubble" if dev_obj else "webhook"))
 
-        if not payload_val:
+        is_hubble_pkt = is_hubble or bool(dev_obj) or bool(loc_obj)
+        if is_hubble_pkt:
+            # Preserve full Hubble JSON packet
+            full_json_payload = dict(pkt)
+            if dev_obj:
+                full_json_payload["device"] = dict(dev_obj)
+            if loc_obj:
+                full_json_payload["location"] = dict(loc_obj)
+            if payload_val:
+                full_json_payload["payload"] = payload_val
+                try:
+                    import base64
+                    b = base64.b64decode(payload_val, validate=True)
+                    full_json_payload["payload_hex"] = b.hex()
+                    if "device" in full_json_payload and isinstance(full_json_payload["device"], dict):
+                        full_json_payload["device"]["payload_hex"] = b.hex()
+                except Exception:
+                    pass
+            raw_bytes = json.dumps(full_json_payload).encode("utf-8")
+        elif not payload_val:
             # Synthesize telemetry JSON if payload is empty beacon/ping
             lat = loc_obj.get("latitude") or pkt.get("latitude")
             lon = loc_obj.get("longitude") or pkt.get("longitude")

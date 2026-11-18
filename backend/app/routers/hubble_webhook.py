@@ -338,7 +338,7 @@ async def ingest_hubble_webhook(
         network_type = pkt.get("network_type") or dev_obj.get("network_type") or "TERRESTRIAL"
         tags = dev_obj.get("tags") if isinstance(dev_obj.get("tags"), dict) else {}
 
-        # 4. Resolve Raw Payload
+        # 4. Resolve Raw Payload & Full Hubble JSON
         raw_payload_data = None
         if "payload" in dev_obj:
             raw_payload_data = dev_obj.get("payload")
@@ -365,23 +365,43 @@ async def ingest_hubble_webhook(
             hubble_meta["tags"] = tags
         hubble_meta = {k: v for k, v in hubble_meta.items() if v is not None}
 
-        # If payload string is present (e.g. "01020304" or base64), decode it
+        # Build complete JSON payload preserving all Hubble metadata, device object, location, and payload
+        full_json_payload = dict(pkt)
+        if dev_obj:
+            full_json_payload["device"] = dict(dev_obj)
+        if loc_obj:
+            full_json_payload["location"] = dict(loc_obj)
+        if network_type:
+            full_json_payload["network_type"] = network_type
+
+        # Flatten common keys to top level for convenient decoder / UI access
+        for k, v in hubble_meta.items():
+            if k not in full_json_payload:
+                full_json_payload[k] = v
+
         if raw_payload_data:
-            raw_bytes = parse_raw_payload(raw_payload_data)
-            # Check Device name dynamically from incoming raw JSON payload if missing
-            if not device_name and raw_bytes:
-                from app.services.device_keywords import extract_device_name
-                dynamic_name = extract_device_name(raw_bytes)
-                if dynamic_name:
-                    device_name = dynamic_name
-        else:
-            if not device_name:
-                device_name = str(device_id)
-            # If payload is empty "" or None (e.g. Hubble location/presence beacon),
-            # synthesize a rich JSON telemetry payload so NibiaaNet captures all parameters directly
-            telemetry_data = dict(hubble_meta)
-            telemetry_data["device_name"] = device_name
-            raw_bytes = json.dumps(telemetry_data).encode("utf-8")
+            full_json_payload["payload"] = raw_payload_data
+            try:
+                parsed_bytes = parse_raw_payload(raw_payload_data)
+                full_json_payload["payload_hex"] = parsed_bytes.hex()
+                if "device" in full_json_payload and isinstance(full_json_payload["device"], dict):
+                    full_json_payload["device"]["payload_hex"] = parsed_bytes.hex()
+            except Exception:
+                pass
+
+        # Check Device name dynamically from incoming raw JSON payload if missing
+        if not device_name:
+            from app.services.device_keywords import extract_device_name
+            dynamic_name = extract_device_name(full_json_payload)
+            if dynamic_name:
+                device_name = dynamic_name
+                full_json_payload["device_name"] = device_name
+
+        if not device_name:
+            device_name = str(device_id)
+
+        # Store the complete Hubble JSON as the message raw payload so the UI and decoder see all JSON fields
+        raw_bytes = json.dumps(full_json_payload).encode("utf-8")
 
         # 5. Extract timestamps
         rx_time = parse_timestamp(
@@ -523,17 +543,18 @@ async def ingest_hubble_webhook(
                 message_ref=str(pkt.get("messageId") or dev_obj.get("counter") or f"hubble-{idx}-{int(rx_time.timestamp())}"),
                 remote_port=443,
                 protocol_id="hubble-webhook",
-                payload_format="json" if not raw_payload_data else None,
+                payload_format="json",
             )
 
-            # Enrich telemetry record with location, RF and network metadata
+            # Enrich telemetry record with location, RF, network metadata, and full Hubble JSON
             if msg and msg.telemetry_id:
                 try:
                     tel = db.get(Telemetry, msg.telemetry_id)
                     if tel:
                         existing_data = tel.data if isinstance(tel.data, dict) else {}
-                        tel.data = {**hubble_meta, **existing_data}
+                        tel.data = {**hubble_meta, **full_json_payload, **existing_data}
                         tel.connection_type = "NTN" if str(network_type).upper() == "SATELLITE" else "TN"
+                        tel.raw_payload = raw_bytes
                         db.commit()
                 except Exception as enrich_err:
                     logger.warning("Could not enrich telemetry metadata: %s", enrich_err)
@@ -552,7 +573,7 @@ async def ingest_hubble_webhook(
                             received_at=datetime.now(timezone.utc),
                             provider="hubble",
                             connection_type="NTN" if str(network_type).upper() == "SATELLITE" else "TN",
-                            data=hubble_meta,
+                            data=full_json_payload,
                             raw_payload=raw_bytes,
                         )
                         db.add(tel_fallback)
