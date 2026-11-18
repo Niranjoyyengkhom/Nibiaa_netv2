@@ -608,6 +608,22 @@ class IngestionService:
         )
 
         if device is None:
+            # Check if device exists by matching name from decoded payload
+            dev_name = None
+            if isinstance(message.decoded, dict):
+                dev_name = (
+                    message.decoded.get("name")
+                    or message.decoded.get("deviceName")
+                    or message.decoded.get("device_name")
+                )
+            if dev_name and str(dev_name).strip():
+                device = (
+                    db.query(Device)
+                    .filter(func.lower(Device.name) == func.lower(str(dev_name).strip()))
+                    .first()
+                )
+
+        if device is None:
             device = self._auto_register_device(db, identifier, message)
 
         # The tenant comes from the registry, never from the message

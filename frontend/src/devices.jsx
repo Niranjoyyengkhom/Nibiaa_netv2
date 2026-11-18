@@ -318,8 +318,7 @@ function Devices({ api, currentUser, navigate, selectedHeaderApplication = "" })
 
   const filteredDevices = typeFilter
     ? applicationDevices.filter((device) =>
-        device.device_type === typeFilter ||
-        device.device_type?.toLowerCase()?.includes(typeFilter.toLowerCase())
+        device.device_type?.toLowerCase() === typeFilter.toLowerCase()
       )
     : applicationDevices;
 
@@ -370,8 +369,7 @@ function Devices({ api, currentUser, navigate, selectedHeaderApplication = "" })
               <span>{type.label}</span>
               <strong>
                 {applicationDevices.filter((device) =>
-                  device.device_type === type.value ||
-                  device.device_type?.toLowerCase()?.includes(type.value.toLowerCase())
+                  device.device_type?.toLowerCase() === type.value.toLowerCase()
                 ).length}
               </strong>
               <small>{type.connection_type === "NTN" ? "Satellite" : "Terrestrial"}</small>

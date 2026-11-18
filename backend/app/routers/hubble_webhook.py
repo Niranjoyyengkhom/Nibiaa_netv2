@@ -308,6 +308,7 @@ async def ingest_hubble_webhook(
         # 1. Resolve Device ID and Name
         device_id = (
             dev_obj.get("id")
+            or dev_obj.get("device_id")
             or pkt.get("deviceId")
             or pkt.get("device_id")
             or dev_obj.get("name")
@@ -397,9 +398,18 @@ async def ingest_hubble_webhook(
                 db.refresh(hubble_cp)
 
             # 6. AUTO-REGISTER DEVICE IF NOT REGISTERED
+            clean_name = str(device_name).strip() if device_name else ""
+            clean_dev_id = str(device_id).strip()
             existing_device = (
                 db.query(Device)
-                .filter((Device.device_id == device_id) | (Device.name == device_name))
+                .filter(
+                    (Device.device_id == clean_dev_id)
+                    | (
+                        func.lower(Device.name) == func.lower(clean_name)
+                        if clean_name
+                        else False
+                    )
+                )
                 .first()
             )
             if not existing_device:
@@ -461,7 +471,17 @@ async def ingest_hubble_webhook(
                 db.add(new_device)
                 db.commit()
                 db.refresh(new_device)
+                target_dev = new_device
                 logger.info("Auto-registered new Hubble device: %s (%s)", device_id, device_name)
+            else:
+                target_dev = existing_device
+                if tags and isinstance(target_dev.credentials, dict):
+                    creds = dict(target_dev.credentials)
+                    creds["tags"] = tags
+                    target_dev.credentials = creds
+                    db.commit()
+
+            canonical_device_id = str(target_dev.device_id)
 
             # Ingest uplink through IngestionService
             msg = ingestion_service.process_uplink(
@@ -469,8 +489,8 @@ async def ingest_hubble_webhook(
                 transport="webhook",
                 raw_payload=raw_bytes,
                 source_address=f"hubble://{remote_ip}",
-                client_id=f"hubble-{device_id}",
-                device_identifier=str(device_id),
+                client_id=f"hubble-{canonical_device_id}",
+                device_identifier=canonical_device_id,
                 received_at=rx_time,
                 provider="hubble",
                 message_ref=str(pkt.get("messageId") or dev_obj.get("counter") or f"hubble-{idx}-{int(rx_time.timestamp())}"),
