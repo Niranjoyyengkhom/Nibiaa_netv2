@@ -380,12 +380,14 @@ async def ingest_hubble_webhook(
                 full_json_payload[k] = v
 
         if raw_payload_data:
-            full_json_payload["payload"] = raw_payload_data
+            full_json_payload["payload"] = str(raw_payload_data)
             try:
                 parsed_bytes = parse_raw_payload(raw_payload_data)
-                full_json_payload["payload_hex"] = parsed_bytes.hex()
+                raw_hex_clean = parsed_bytes.hex()
+                formatted_hex = " ".join(raw_hex_clean[i:i+2] for i in range(0, len(raw_hex_clean), 2))
+                full_json_payload["payload_hex"] = formatted_hex
                 if "device" in full_json_payload and isinstance(full_json_payload["device"], dict):
-                    full_json_payload["device"]["payload_hex"] = parsed_bytes.hex()
+                    full_json_payload["device"]["payload_hex"] = formatted_hex
             except Exception:
                 pass
 
@@ -552,7 +554,12 @@ async def ingest_hubble_webhook(
                     tel = db.get(Telemetry, msg.telemetry_id)
                     if tel:
                         existing_data = tel.data if isinstance(tel.data, dict) else {}
+                        # Ensure payload is preserved as the raw base64 string and not a decoded object
+                        if "payload" in existing_data and not isinstance(existing_data["payload"], str):
+                            existing_data["payload"] = str(raw_payload_data or "")
                         tel.data = {**hubble_meta, **full_json_payload, **existing_data}
+                        if raw_payload_data:
+                            tel.data["payload"] = str(raw_payload_data)
                         tel.connection_type = "NTN" if str(network_type).upper() == "SATELLITE" else "TN"
                         tel.raw_payload = raw_bytes
                         db.commit()

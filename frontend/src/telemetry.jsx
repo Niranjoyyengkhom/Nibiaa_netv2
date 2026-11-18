@@ -57,6 +57,7 @@ function hexToBase64(hex) {
 
 function formatValues(values) {
   return Object.entries(values || {})
+    .filter(([key, value]) => typeof value !== "object" || value === null)
     .map(([key, value]) => `${key}: ${value}`)
     .join(" · ");
 }
