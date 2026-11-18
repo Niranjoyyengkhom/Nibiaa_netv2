@@ -424,6 +424,7 @@ async def ingest_hubble_webhook(
                 )
                 .first()
             )
+            net_type_standard = "NTN" if str(network_type).upper() == "SATELLITE" else "BLE"
             if not existing_device:
                 # Find or create active tenant
                 tenant = db.query(Tenant).filter(Tenant.is_active == True).first()
