@@ -364,9 +364,14 @@ class IngestionService:
                     or message.decoded.get("application_id")
                 )
                 if dev_name and str(dev_name).strip():
-                    device.name = str(dev_name).strip()
+                    current_name = (device.name or "").strip()
+                    # Permanent device name mapping: never overwrite an established device name during telemetry ingestion
+                    if not current_name or current_name.startswith("Device ") or current_name.startswith("Hubble "):
+                        device.name = str(dev_name).strip()
                 if dev_type and str(dev_type).strip():
-                    device.device_type = str(dev_type).strip()
+                    current_type = (device.device_type or "").strip()
+                    if not current_type or current_type in ("Direct IP", "sensor"):
+                        device.device_type = str(dev_type).strip()
                 if creds and isinstance(creds, dict):
                     existing = device.credentials if isinstance(device.credentials, dict) else {}
                     device.credentials = {**existing, **creds}

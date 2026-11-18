@@ -475,6 +475,11 @@ async def ingest_hubble_webhook(
                 logger.info("Auto-registered new Hubble device: %s (%s)", device_id, device_name)
             else:
                 target_dev = existing_device
+                # Enforce permanent device name mapping: do not let incoming packet overwrite device name
+                device_name = target_dev.name
+                if not raw_payload_data and "telemetry_data" in locals() and isinstance(telemetry_data, dict):
+                    telemetry_data["device_name"] = target_dev.name
+                    raw_bytes = json.dumps(telemetry_data).encode("utf-8")
                 if tags and isinstance(target_dev.credentials, dict):
                     creds = dict(target_dev.credentials)
                     creds["tags"] = tags

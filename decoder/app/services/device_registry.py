@@ -111,19 +111,23 @@ def ensure_device_registered(
         updates = []
         params = {"dev_id": clean_id}
 
-        # Update name if specified and differs or if current name is generic
+        # Permanent name mapping: NEVER overwrite an existing device name during ingestion/decoding!
         if name and name.strip():
             candidate_name = name.strip()
-            if row["name"] != candidate_name:
-                updates.append("name = :name")
-                params["name"] = candidate_name
+            current_name = (row["name"] or "").strip()
+            if not current_name or current_name.startswith("Device ") or current_name.startswith("Hubble "):
+                if current_name != candidate_name:
+                    updates.append("name = :name")
+                    params["name"] = candidate_name
 
-        # Update device_type if specified and differs
+        # Update device_type if current is missing or generic
         if device_type and device_type.strip():
             candidate_type = device_type.strip()
-            if row["device_type"] != candidate_type:
-                updates.append("device_type = :dev_type")
-                params["dev_type"] = candidate_type
+            current_type = (row["device_type"] or "").strip()
+            if not current_type or current_type in ("Direct IP", "sensor"):
+                if current_type != candidate_type:
+                    updates.append("device_type = :dev_type")
+                    params["dev_type"] = candidate_type
 
         # Update application_id if specified and differs
         if application_id is not None and application_id != row["application_id"]:
