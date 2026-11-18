@@ -349,6 +349,22 @@ async def ingest_hubble_webhook(
         elif "data" in pkt:
             raw_payload_data = pkt.get("data")
 
+        # Always extract rich location, RF and network metadata from Hubble packet
+        hubble_meta = {
+            "latitude": float(lat) if lat is not None else None,
+            "longitude": float(lon) if lon is not None else None,
+            "altitude": float(altitude) if altitude is not None else None,
+            "horizontal_accuracy": float(accuracy) if accuracy is not None else None,
+            "rssi": int(rssi) if rssi is not None else None,
+            "sequence_number": int(seq) if seq is not None else None,
+            "counter": int(counter) if counter is not None else None,
+            "network_type": str(network_type) if network_type is not None else None,
+            "device_name": device_name,
+        }
+        if tags:
+            hubble_meta["tags"] = tags
+        hubble_meta = {k: v for k, v in hubble_meta.items() if v is not None}
+
         # If payload string is present (e.g. "01020304" or base64), decode it
         if raw_payload_data:
             raw_bytes = parse_raw_payload(raw_payload_data)
@@ -363,20 +379,8 @@ async def ingest_hubble_webhook(
                 device_name = str(device_id)
             # If payload is empty "" or None (e.g. Hubble location/presence beacon),
             # synthesize a rich JSON telemetry payload so NibiaaNet captures all parameters directly
-            telemetry_data = {
-                "latitude": float(lat) if lat is not None else None,
-                "longitude": float(lon) if lon is not None else None,
-                "altitude": float(altitude) if altitude is not None else None,
-                "horizontal_accuracy": float(accuracy) if accuracy is not None else None,
-                "rssi": int(rssi) if rssi is not None else None,
-                "sequence_number": int(seq) if seq is not None else None,
-                "counter": int(counter) if counter is not None else None,
-                "network_type": str(network_type) if network_type is not None else None,
-                "device_name": device_name,
-            }
-            if tags:
-                telemetry_data["tags"] = tags
-            telemetry_data = {k: v for k, v in telemetry_data.items() if v is not None}
+            telemetry_data = dict(hubble_meta)
+            telemetry_data["device_name"] = device_name
             raw_bytes = json.dumps(telemetry_data).encode("utf-8")
 
         # 5. Extract timestamps
@@ -483,7 +487,16 @@ async def ingest_hubble_webhook(
                 logger.info("Auto-registered new Hubble device: %s (%s)", device_id, device_name)
             else:
                 target_dev = existing_device
-                # Enforce permanent device name mapping: do not let incoming packet overwrite device name
+                # Dynamically update device name from incoming Hubble packet if provided
+                hubble_name = dev_obj.get("name") or pkt.get("name")
+                if hubble_name and str(hubble_name).strip() and str(hubble_name).strip() != str(target_dev.device_id):
+                    clean_hubble_name = str(hubble_name).strip()
+                    if target_dev.name != clean_hubble_name:
+                        logger.info("Dynamically updated device %s name from '%s' to '%s'", target_dev.device_id, target_dev.name, clean_hubble_name)
+                        target_dev.name = clean_hubble_name
+                # Dynamically update network type to match the current uplink connection
+                if net_type_standard and target_dev.device_type != net_type_standard:
+                    target_dev.device_type = net_type_standard
                 device_name = target_dev.name
                 if not raw_payload_data and "telemetry_data" in locals() and isinstance(telemetry_data, dict):
                     telemetry_data["device_name"] = target_dev.name
@@ -492,7 +505,7 @@ async def ingest_hubble_webhook(
                     creds = dict(target_dev.credentials)
                     creds["tags"] = tags
                     target_dev.credentials = creds
-                    db.commit()
+                db.commit()
 
             canonical_device_id = str(target_dev.device_id)
 
@@ -512,6 +525,18 @@ async def ingest_hubble_webhook(
                 payload_format="json" if not raw_payload_data else None,
             )
 
+            # Enrich telemetry record with location, RF and network metadata
+            if msg and msg.telemetry_id:
+                try:
+                    tel = db.get(Telemetry, msg.telemetry_id)
+                    if tel:
+                        existing_data = tel.data if isinstance(tel.data, dict) else {}
+                        tel.data = {**hubble_meta, **existing_data}
+                        tel.connection_type = "NTN" if str(network_type).upper() == "SATELLITE" else "TN"
+                        db.commit()
+                except Exception as enrich_err:
+                    logger.warning("Could not enrich telemetry metadata: %s", enrich_err)
+
             # Dispatch message asynchronously for live subscribers & webhooks
             if msg and msg.status == DecodedMessageStatus.ROUTED:
                 background_tasks.add_task(ingestion_service.dispatch, msg.id)
@@ -526,7 +551,7 @@ async def ingest_hubble_webhook(
                             received_at=datetime.now(timezone.utc),
                             provider="hubble",
                             connection_type="NTN" if str(network_type).upper() == "SATELLITE" else "TN",
-                            data=telemetry_data,
+                            data=hubble_meta,
                             raw_payload=raw_bytes,
                         )
                         db.add(tel_fallback)
