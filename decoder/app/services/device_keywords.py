@@ -10,6 +10,7 @@ Inspects decoded output and message context for special device metadata keywords
 - Credentials & Hardware Keys: credentials, keys, imei, hardware_serial, dev_eui, app_eui, etc.
 """
 
+import json
 from typing import Any, Dict, Optional, Tuple
 
 DEVICE_ID_KEYS = ("deviceId", "device_id", "dev_id", "devId", "deviceIdZh")
@@ -225,3 +226,62 @@ def _harvest_keys(
             meta["credentials"][k] = str(source[k]).strip()
             if strip_from and k in strip_from:
                 strip_from.pop(k)
+
+
+def extract_device_name(payload: Any) -> Optional[str]:
+    """
+    Dynamically extracts device name from raw JSON payload (bytes/str)
+    or parsed/decoded payload dictionary.
+    """
+    if not payload:
+        return None
+
+    data = None
+    if isinstance(payload, bytes):
+        try:
+            s = payload.decode("utf-8", errors="ignore").strip()
+            if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+                data = json.loads(s)
+        except Exception:
+            return None
+    elif isinstance(payload, str):
+        s = payload.strip()
+        if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+            try:
+                data = json.loads(s)
+            except Exception:
+                return None
+        else:
+            return None
+    elif isinstance(payload, dict):
+        data = payload
+
+    if isinstance(data, list) and data:
+        data = data[0] if isinstance(data[0], dict) else None
+
+    if not isinstance(data, dict):
+        return None
+
+    # 1. Check direct keys: deviceName, device_name, name, devName, etc.
+    for k in DEVICE_NAME_KEYS:
+        val = data.get(k)
+        if val and isinstance(val, str) and val.strip():
+            return val.strip()
+
+    # 2. Check nested "device" container: {"device": {"name": "...", "deviceName": "..."}}
+    dev_container = data.get("device")
+    if isinstance(dev_container, dict):
+        for k in DEVICE_NAME_KEYS:
+            val = dev_container.get(k)
+            if val and isinstance(val, str) and val.strip():
+                return val.strip()
+
+    # 3. Check nested "data" container: {"data": {"deviceName": "...", "name": "..."}}
+    data_container = data.get("data")
+    if isinstance(data_container, dict):
+        for k in DEVICE_NAME_KEYS:
+            val = data_container.get(k)
+            if val and isinstance(val, str) and val.strip():
+                return val.strip()
+
+    return None

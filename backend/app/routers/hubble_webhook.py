@@ -317,7 +317,7 @@ async def ingest_hubble_webhook(
             or pkt.get("id")
             or pkt.get("deviceAddress")
         )
-        device_name = dev_obj.get("name") or pkt.get("name") or str(device_id)
+        device_name = dev_obj.get("name") or pkt.get("name")
 
         if not device_id:
             logger.warning("Skipping malformed Hubble packet at index %d: missing device identifier in %s", idx, pkt)
@@ -352,7 +352,15 @@ async def ingest_hubble_webhook(
         # If payload string is present (e.g. "01020304" or base64), decode it
         if raw_payload_data:
             raw_bytes = parse_raw_payload(raw_payload_data)
+            # Check Device name dynamically from incoming raw JSON payload if missing
+            if not device_name and raw_bytes:
+                from app.services.device_keywords import extract_device_name
+                dynamic_name = extract_device_name(raw_bytes)
+                if dynamic_name:
+                    device_name = dynamic_name
         else:
+            if not device_name:
+                device_name = str(device_id)
             # If payload is empty "" or None (e.g. Hubble location/presence beacon),
             # synthesize a rich JSON telemetry payload so NibiaaNet captures all parameters directly
             telemetry_data = {

@@ -100,16 +100,25 @@ def ensure_device_registered(
                 logger.info(f"Routed device '{clean_id}' to application ID {application_id} via active application_decoder ID {sid}.")
                 break
 
-    # 1. Check if device already exists
-    query = text(
-        "SELECT id, device_id, name, device_type, tenant_id, application_id, credentials "
-        "FROM devices WHERE device_id = :dev_id"
-    )
-    row = db.execute(query, {"dev_id": clean_id}).mappings().first()
+    # 1. Check if device already exists by device_id OR dynamically by name
+    clean_name = str(name).strip() if name and str(name).strip() else None
+    if clean_name:
+        query = text(
+            "SELECT id, device_id, name, device_type, tenant_id, application_id, credentials "
+            "FROM devices WHERE device_id = :dev_id OR LOWER(name) = LOWER(:dev_name) LIMIT 1"
+        )
+        row = db.execute(query, {"dev_id": clean_id, "dev_name": clean_name}).mappings().first()
+    else:
+        query = text(
+            "SELECT id, device_id, name, device_type, tenant_id, application_id, credentials "
+            "FROM devices WHERE device_id = :dev_id LIMIT 1"
+        )
+        row = db.execute(query, {"dev_id": clean_id}).mappings().first()
 
     if row:
+        target_dev_id = row["device_id"]
         updates = []
-        params = {"dev_id": clean_id}
+        params = {"dev_id": target_dev_id}
 
         # Permanent name mapping: NEVER overwrite an existing device name during ingestion/decoding!
         if name and name.strip():

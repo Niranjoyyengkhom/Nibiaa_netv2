@@ -350,9 +350,44 @@ class IngestionService:
             # 3. Decode with the application's decoder, else the best match
             self._decode(db, message, device, profile)
 
+            # Check Device name dynamically from the Decoded payload
+            from app.services.device_keywords import extract_device_name
+            decoded_name = extract_device_name(message.decoded)
+            if decoded_name:
+                matched_device = (
+                    db.query(Device)
+                    .filter(
+                        (func.lower(Device.name) == func.lower(decoded_name))
+                        | (Device.device_id == decoded_name)
+                    )
+                    .first()
+                )
+                if matched_device and matched_device.id != device.id:
+                    logger.info(
+                        "Dynamically re-mapped decoded message from temporary device '%s' to matched device '%s' (PK %s) via decoded name '%s'",
+                        device.device_id,
+                        matched_device.device_id,
+                        matched_device.id,
+                        decoded_name
+                    )
+                    # Clean up temporary auto-created dummy device if it was just provisioned
+                    curr_name = (device.name or "").strip()
+                    if curr_name.startswith("Device ") and device.credentials and device.credentials.get("registered_by") == "decoder_ingest":
+                        try:
+                            db.delete(device)
+                            db.flush()
+                        except Exception:
+                            pass
+
+                    device = matched_device
+                    message.device_pk = matched_device.id
+                    message.tenant_id = matched_device.tenant_id
+                elif not (device.name or "").strip() or device.name.startswith("Device ") or device.name.startswith("Hubble "):
+                    device.name = decoded_name
+                    db.flush()
+
             # Update device if decoder returned special provisioning keywords
             if isinstance(message.decoded, dict):
-                dev_name = message.decoded.get("deviceName") or message.decoded.get("device_name")
                 dev_type = message.decoded.get("deviceType") or message.decoded.get("device_type")
                 creds = message.decoded.get("credentials")
                 target_app_key = (
@@ -363,11 +398,6 @@ class IngestionService:
                     or message.decoded.get("applicationId")
                     or message.decoded.get("application_id")
                 )
-                if dev_name and str(dev_name).strip():
-                    current_name = (device.name or "").strip()
-                    # Permanent device name mapping: never overwrite an established device name during telemetry ingestion
-                    if not current_name or current_name.startswith("Device ") or current_name.startswith("Hubble "):
-                        device.name = str(dev_name).strip()
                 if dev_type and str(dev_type).strip():
                     current_type = (device.device_type or "").strip()
                     if not current_type or current_type in ("Direct IP", "sensor"):
@@ -465,7 +495,8 @@ class IngestionService:
         self,
         db: Session,
         identifier: str,
-        message: DecodedMessage
+        message: DecodedMessage,
+        initial_name: str | None = None
     ) -> Device:
         """
         Auto-register a device into the platform when its first uplink is processed by the decoder.
@@ -567,9 +598,10 @@ class IngestionService:
             db.flush()
 
         # 4. Create and persist Device
+        dev_display_name = str(initial_name).strip() if initial_name and str(initial_name).strip() else f"Device {identifier}"
         device = Device(
             device_id=identifier,
-            name=f"Device {identifier}",
+            name=dev_display_name,
             device_type=device_type,
             device_type_id=dt.id if dt else None,
             tenant_id=tenant.id,
@@ -606,30 +638,52 @@ class IngestionService:
             message.status = DecodedMessageStatus.UNKNOWN_DEVICE
             raise IngestError("No device identifier in the incoming message")
 
+        # 1. Match by exact device_id
         device = (
             db.query(Device)
             .filter(Device.device_id == identifier)
             .first()
         )
 
-        if device is None:
-            # Check if device exists by matching name from decoded payload
-            dev_name = None
-            if isinstance(message.decoded, dict):
-                dev_name = (
-                    message.decoded.get("name")
-                    or message.decoded.get("deviceName")
-                    or message.decoded.get("device_name")
+        # 2. Match dynamically by Device Name from raw incoming JSON payload
+        from app.services.device_keywords import extract_device_name
+        dynamic_name = extract_device_name(message.raw_payload)
+
+        if device is None and dynamic_name:
+            device = (
+                db.query(Device)
+                .filter(
+                    (func.lower(Device.name) == func.lower(dynamic_name))
+                    | (Device.device_id == dynamic_name)
                 )
-            if dev_name and str(dev_name).strip():
-                device = (
-                    db.query(Device)
-                    .filter(func.lower(Device.name) == func.lower(str(dev_name).strip()))
-                    .first()
+                .first()
+            )
+            if device:
+                logger.info(
+                    "Dynamically matched device '%s' (PK %s) using payload device name '%s'",
+                    device.device_id,
+                    device.id,
+                    dynamic_name
                 )
 
+        # 3. Match if identifier itself is a registered device name
+        if device is None and identifier:
+            device = (
+                db.query(Device)
+                .filter(func.lower(Device.name) == func.lower(str(identifier).strip()))
+                .first()
+            )
+
+        # 4. Match by client_id suffix (e.g. hubble-xiao-69s-c6)
+        if device is None and message.client_id:
+            clean_client = str(message.client_id).strip()
+            if "-" in clean_client:
+                suffix = clean_client.split("-", 1)[1]
+                if suffix:
+                    device = db.query(Device).filter(func.lower(Device.name) == func.lower(suffix)).first()
+
         if device is None:
-            device = self._auto_register_device(db, identifier, message)
+            device = self._auto_register_device(db, identifier, message, initial_name=dynamic_name)
 
         # The tenant comes from the registry, never from the message
         message.device_pk = device.id
