@@ -31,18 +31,30 @@ nibiaanet.nibiaa.com, nibiaaplaxx.nibiaa.com {
 
     # Core Backend REST API
     handle_path /api/* {
-        reverse_proxy backend:3000
+        reverse_proxy backend:3000 {
+            header_down Location ^/(.*) /api/$1
+            header_down Location http:// https://
+        }
     }
 
     # Microservice reverse proxies
     handle_path /decoder/* {
-        reverse_proxy decoder:3001
+        reverse_proxy decoder:3001 {
+            header_down Location ^/(.*) /decoder/$1
+            header_down Location http:// https://
+        }
     }
     handle_path /iam/* {
-        reverse_proxy iam:3002
+        reverse_proxy iam:3002 {
+            header_down Location ^/(.*) /iam/$1
+            header_down Location http:// https://
+        }
     }
     handle_path /billing-service/* {
-        reverse_proxy billing:3003
+        reverse_proxy billing:3003 {
+            header_down Location ^/(.*) /billing-service/$1
+            header_down Location http:// https://
+        }
     }
 
     # Frontend Dashboard Web Console

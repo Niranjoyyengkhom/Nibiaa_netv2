@@ -49,6 +49,7 @@ def create_schema(
     )
 
 
+@router.get("", include_in_schema=False)
 @router.get(
     "/",
     response_model=list[DecodeSchemaResponse],

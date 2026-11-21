@@ -22,6 +22,7 @@ router = APIRouter(
 device_service = DeviceService()
 
 
+@router.get("", include_in_schema=False)
 @router.get(
     "/",
     response_model=list[DeviceResponse],

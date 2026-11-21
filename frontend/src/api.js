@@ -97,6 +97,10 @@ export function createApi(token, onUnauthorized, baseUrl = API) {
       throw new ApiError(errorMessage(data), response.status);
     }
 
+    if (data === null && response.status !== 204) {
+      throw new ApiError("Invalid response received from server", 502);
+    }
+
     return data;
   }
 

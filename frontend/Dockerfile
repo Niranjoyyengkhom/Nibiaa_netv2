@@ -7,7 +7,9 @@ RUN npm install
 
 COPY . .
 
+RUN chmod +x docker-entrypoint.sh
+
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["npx", "vite", "--host", "0.0.0.0", "--port", "8080"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

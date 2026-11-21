@@ -23,6 +23,7 @@ router = APIRouter(
 application_service = ApplicationService()
 
 
+@router.get("", include_in_schema=False)
 @router.get(
     "/",
     response_model=list[ApplicationResponse],

@@ -15,6 +15,7 @@ router = APIRouter(
 tenant_service = TenantService()
 
 
+@router.get("", include_in_schema=False)
 @router.get(
     "/",
     response_model=list[TenantResponse],
